@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Mesa;
 use Illuminate\Http\Request;
 use App\Models\Usuario;
 use Illuminate\Support\Facades\Hash;
@@ -45,10 +46,11 @@ class AuthController extends Controller
     // LOGIN
     public function login(Request $request)
     {
-        // Validación
+        // Validación básica
         $request->validate([
             'email' => 'required|email',
-            'password' => 'required|string'
+            'password' => 'required|string',
+            'codigo' => 'nullable|string' // este es opcional
         ]);
 
         // Buscar usuario
@@ -64,11 +66,25 @@ class AuthController extends Controller
         // Crear token
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        // Respuesta JSON
-        return response()->json([
+        // Preparar respuesta base
+        $response = [
             'access_token' => $token,
             'token_type' => 'Bearer',
             'user' => $user
-        ]);
+        ];
+
+        // ✅ Si envían codigo, buscar mesa
+        if ($request->filled('codigo')) {
+            $mesa = Mesa::where('codigo', $request->codigo)->first();
+
+            if ($mesa) {
+                $response['mesa'] = $mesa;
+            } else {
+                // opcional: devolver mensaje si el código no existe
+                $response['mesa'] = null;
+            }
+        }
+
+        return response()->json($response);
     }
 }

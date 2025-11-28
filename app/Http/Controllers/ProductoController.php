@@ -19,6 +19,23 @@ class ProductoController extends Controller
     }
 
     // =============================
+    // 📌 LISTAR PRODUCTOS POR CATEGORÍA
+    // =============================
+    public function porCategoria($id_categoria)
+    {
+        $productos = Producto::where('id_categoria', $id_categoria)
+            ->with('categoria')
+            ->orderBy('id', 'DESC')
+            ->get();
+
+        return response()->json([
+            'categoria' => $id_categoria,
+            'productos' => $productos
+        ]);
+    }
+
+
+    // =============================
     // 📌 CREAR PRODUCTO
     // =============================
     public function store(Request $request)

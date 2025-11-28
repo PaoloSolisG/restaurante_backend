@@ -63,6 +63,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/productos/{id}', 'show');
         Route::put('/productos/{id}', 'update');
         Route::delete('/productos/{id}', 'destroy');
+
+        // 👉 Listar productos por categoría
+        Route::get('/productos/categoria/{id_categoria}', 'porCategoria');
     });
 
 
@@ -110,7 +113,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/ordenes/estado/{estado}', [OrdenController::class, 'ordenesPorEstado']);
 
         Route::put('/ordenes/{id}/asignar-mozo', [OrdenController::class, 'asignarMozo']);
-
     });
 
     /*
