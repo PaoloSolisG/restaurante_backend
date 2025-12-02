@@ -46,7 +46,7 @@ class ProductoController extends Controller
             'descripcion'  => 'nullable|string',
             'id_categoria' => 'required|exists:categorias,id',
             'precio'       => 'required|numeric|min:0',
-            'imagen'       => 'nullable|string',
+            'imagen'       => 'nullable|file|image|max:1024',
             'activo'       => 'boolean'
         ]);
 
@@ -62,6 +62,7 @@ class ProductoController extends Controller
             'producto' => $producto
         ]);
     }
+
 
     // =============================
     // 📌 MOSTRAR UN PRODUCTO
@@ -86,7 +87,7 @@ class ProductoController extends Controller
             'descripcion'  => 'nullable|string',
             'id_categoria' => 'sometimes|exists:categorias,id',
             'precio'       => 'sometimes|numeric|min:0',
-            'imagen'       => 'nullable|string',
+            'imagen'       => 'nullable|file|image|max:1024',
             'activo'       => 'boolean'
         ]);
 

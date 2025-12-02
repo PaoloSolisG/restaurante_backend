@@ -38,7 +38,7 @@ Route::post('/login', [AuthController::class, 'login']);
 | Authorization: Bearer TU_TOKEN
 */
 Route::middleware('auth:sanctum')->group(function () {
-
+    Route::post('/logout', [AuthController::class, 'logoutAll']);
     /*
     |--------------------------------------------------------------------------
     | CRUD Categorías

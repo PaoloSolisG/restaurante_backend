@@ -87,4 +87,14 @@ class AuthController extends Controller
 
         return response()->json($response);
     }
+
+
+    public function logoutAll(Request $request)
+    {
+        $request->user()->tokens()->delete();
+
+        return response()->json([
+            'message' => 'Todas las sesiones han sido cerradas'
+        ]);
+    }
 }
