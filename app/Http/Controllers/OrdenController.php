@@ -12,123 +12,170 @@ use Illuminate\Http\Request;
 class OrdenController extends Controller
 {
     /**
-     * Listar órdenes
+     * GET /ordenes
+     * Filtros opcionales: ?mesa_id=X  ?estado=Y
      */
-    public function index()
+    public function index(Request $request)
     {
+        $query = Orden::with('mesa', 'cliente', 'detalles.producto');
+
+        if ($request->filled('mesa_id')) {
+            $query->where('mesa_id', $request->mesa_id);
+        }
+        if ($request->filled('estado')) {
+            $query->where('estado', $request->estado);
+        }
+
         return response()->json([
             'status' => true,
-            'data' => Orden::with('mesa', 'cliente', 'detalles.producto')->get()
+            'data'   => $query->orderByDesc('created_at')->get(),
         ]);
     }
 
     /**
-     * Crear orden con detalles
+     * POST /ordenes
      */
     public function store(Request $request)
     {
         $request->validate([
-            'mesa_id' => 'required|exists:mesas,id',
-            'cliente_id' => 'nullable|integer',
-            'tipo_consumo' => 'required|in:mesa,llevar,delivery',
-            'detalles' => 'required|array|min:1',
+            'mesa_id'                => 'required|exists:mesas,id',
+            'cliente_id'             => 'nullable|integer',
+            'tipo_consumo'           => 'required|in:mesa,llevar,delivery,para_llevar',
+            'detalles'               => 'required|array|min:1',
             'detalles.*.producto_id' => 'required|integer',
-            'detalles.*.cantidad' => 'required|integer|min:1'
+            'detalles.*.cantidad'    => 'required|integer|min:1',
         ]);
 
-        // Validar cliente si se proporciona
-        if ($request->cliente_id) {
-            $cliente = Cliente::find($request->cliente_id);
-            if (!$cliente) {
-                return response()->json([
-                    'status' => false,
-                    'message' => "El cliente con ID {$request->cliente_id} no existe"
-                ], 404);
-            }
+        if ($request->cliente_id && !Cliente::find($request->cliente_id)) {
+            return response()->json(['status' => false, 'message' => "Cliente con ID {$request->cliente_id} no existe"], 404);
         }
 
-        // Validar mesa y su estado
         $mesa = Mesa::find($request->mesa_id);
         if (!$mesa) {
-            return response()->json([
-                'status' => false,
-                'message' => "La mesa con ID {$request->mesa_id} no existe"
-            ], 404);
+            return response()->json(['status' => false, 'message' => "Mesa con ID {$request->mesa_id} no existe"], 404);
         }
-
         if ($mesa->estado === 'ocupada') {
-            return response()->json([
-                'status' => false,
-                'message' => "La mesa {$mesa->numero} está ocupada"
-            ], 400);
+            return response()->json(['status' => false, 'message' => "La mesa {$mesa->numero} ya está ocupada"], 400);
         }
 
-
-        // Validación manual de productos
         foreach ($request->detalles as $item) {
             if (!Producto::find($item['producto_id'])) {
-                return response()->json([
-                    'status' => false,
-                    'message' => "El producto con ID {$item['producto_id']} no existe"
-                ], 404);
+                return response()->json(['status' => false, 'message' => "Producto con ID {$item['producto_id']} no existe"], 404);
             }
         }
 
-        // Crear la orden
         $orden = Orden::create([
-            'mesa_id' => $request->mesa_id,
-            'cliente_id' => $request->cliente_id,
+            'mesa_id'      => $request->mesa_id,
+            'cliente_id'   => $request->cliente_id,
+            'mozo_id'      => $request->mozo_id ?? null,
             'tipo_consumo' => $request->tipo_consumo,
-            'notas' => $request->notas,
-            'subtotal' => 0,
-            'total' => 0,
+            'notas'        => $request->notas,
+            'subtotal'     => 0,
+            'total'        => 0,
         ]);
 
-        $mesa->update([
-            'estado' => 'ocupada'
-        ]);
+        $mesa->update(['estado' => 'ocupada']);
 
         $subtotal = 0;
-
         foreach ($request->detalles as $item) {
-            $producto = Producto::find($item['producto_id']);
-            $lineaSubtotal = $producto->precio * $item['cantidad'];
-            $subtotal += $lineaSubtotal;
-
-            // Determinar el área según tipo de producto
-            $area = $producto->categoria->area ?? 'cocina';
-
+            $producto      = Producto::find($item['producto_id']);
+            $linea         = $producto->precio * $item['cantidad'];
+            $subtotal     += $linea;
+            $area          = $producto->categoria->area ?? 'cocina';
 
             OrdenDetalle::create([
-                'orden_id' => $orden->id,
-                'producto_id' => $producto->id,
-                'cantidad' => $item['cantidad'],
+                'orden_id'        => $orden->id,
+                'producto_id'     => $producto->id,
+                'cantidad'        => $item['cantidad'],
                 'precio_unitario' => $producto->precio,
-                'subtotal' => $lineaSubtotal,
-                'cocinero_id' => null, // reservado para futuro
-                'area' => $area,
-                'estado' => 'pendiente'
+                'subtotal'        => $linea,
+                'cocinero_id'     => null,
+                'area'            => $area,
+                'estado'          => 'pendiente',
             ]);
         }
 
-
-        $orden->update([
-            'subtotal' => $subtotal,
-            'total' => $subtotal
-        ]);
+        $orden->update(['subtotal' => $subtotal, 'total' => $subtotal]);
 
         return response()->json([
-            'status' => true,
+            'status'  => true,
             'message' => 'Orden creada correctamente',
-            'data' => $orden->load('detalles.producto')
+            'data'    => $orden->load('mesa', 'cliente', 'detalles.producto'),
+        ], 201);
+    }
+
+    /**
+     * GET /ordenes/:id
+     */
+    public function show($id)
+    {
+        $orden = Orden::with('mesa', 'cliente', 'detalles.producto')->find($id);
+        if (!$orden) {
+            return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
+        }
+        return response()->json(['status' => true, 'data' => $orden]);
+    }
+
+    /**
+     * PUT /ordenes/:id
+     * Actualiza estado, notas, mozo_id
+     */
+    public function update(Request $request, $id)
+    {
+        $orden = Orden::find($id);
+        if (!$orden) {
+            return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
+        }
+
+        $request->validate([
+            'estado'  => 'nullable|in:pendiente,en_preparacion,listo,entregado,cerrado,cancelado',
+            'notas'   => 'nullable|string',
+            'mozo_id' => 'nullable|exists:mozos,id',
+        ]);
+
+        $orden->update($request->only(['estado', 'notas', 'mozo_id']));
+
+        // Liberar la mesa cuando la orden se cierra o cancela
+        if (in_array($request->estado, ['cerrado', 'cancelado']) && $orden->mesa) {
+            $orden->mesa->update(['estado' => 'libre']);
+        }
+
+        return response()->json([
+            'status'  => true,
+            'message' => 'Orden actualizada',
+            'data'    => $orden->fresh('mesa', 'cliente', 'detalles.producto'),
         ]);
     }
 
-
     /**
-     * Mostrar orden
+     * DELETE /ordenes/:id
+     * Elimina orden y libera la mesa
      */
-    public function show($id)
+    public function destroy($id)
+    {
+        $orden = Orden::find($id);
+        if (!$orden) {
+            return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
+        }
+        if ($orden->mesa) {
+            $orden->mesa->update(['estado' => 'libre']);
+        }
+        $orden->delete();
+        return response()->json(['status' => true, 'message' => 'Orden eliminada']);
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // CERRAR ORDEN (PRE CUENTA → FACTURAR)
+    // POST /ordenes/:id/cerrar
+    //
+    // Flujo:
+    //   pendiente → en_preparacion → listo → [cerrado]
+    //
+    // Este endpoint marca la orden como 'cerrado' y libera la mesa.
+    // Cuando implementes facturación electrónica, insertas el paso
+    // de generar el comprobante ANTES de llamar a este endpoint.
+    // ──────────────────────────────────────────────────────────
+    public function cerrar(Request $request, $id)
     {
         $orden = Orden::with('mesa', 'cliente', 'detalles.producto')->find($id);
 
@@ -136,155 +183,167 @@ class OrdenController extends Controller
             return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
         }
 
-        return response()->json(['status' => true, 'data' => $orden]);
+        if ($orden->estado === 'cerrado') {
+            return response()->json(['status' => false, 'message' => 'La orden ya está cerrada'], 400);
+        }
+
+        if ($orden->estado === 'cancelado') {
+            return response()->json(['status' => false, 'message' => 'No se puede cerrar una orden cancelada'], 400);
+        }
+
+        // Recalcular total por si acaso (seguridad)
+        $subtotalReal = $orden->detalles->sum(fn($d) => $d->subtotal);
+
+        $orden->update([
+            'estado'   => 'cerrado',
+            'subtotal' => $subtotalReal,
+            'total'    => $subtotalReal,
+        ]);
+
+        // Liberar la mesa
+        if ($orden->mesa) {
+            $orden->mesa->update(['estado' => 'libre']);
+        }
+
+        return response()->json([
+            'status'  => true,
+            'message' => "Orden #{$orden->id} cerrada. Mesa {$orden->mesa?->numero} liberada.",
+            'data'    => $orden->fresh('mesa', 'cliente', 'detalles.producto'),
+        ]);
     }
 
-    /**
-     * Cambiar estado
-     */
-    public function update(Request $request, $id)
+    // ──────────────────────────────────────────────────────────
+    // AGREGAR PRODUCTOS A ORDEN EXISTENTE
+    // POST /ordenes/:id/detalles
+    // ──────────────────────────────────────────────────────────
+    public function agregarDetalles(Request $request, $id)
     {
         $orden = Orden::find($id);
-
         if (!$orden) {
             return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
+        }
+        if (in_array($orden->estado, ['cerrado', 'cancelado'])) {
+            return response()->json(['status' => false, 'message' => "No se pueden agregar productos a una orden '{$orden->estado}'"], 400);
         }
 
         $request->validate([
-            'estado' => 'in:pendiente,en_preparacion,listo,entregado,cerrado,cancelado',
-            'notas' => 'nullable|string'
+            'detalles'               => 'required|array|min:1',
+            'detalles.*.producto_id' => 'required|integer',
+            'detalles.*.cantidad'    => 'required|integer|min:1',
         ]);
 
-        $orden->update($request->only(['estado', 'notas']));
+        $incremento = 0;
 
-        return response()->json(['status' => true, 'message' => 'Orden actualizada']);
-    }
+        foreach ($request->detalles as $item) {
+            $producto = Producto::find($item['producto_id']);
+            if (!$producto) {
+                return response()->json(['status' => false, 'message' => "Producto con ID {$item['producto_id']} no existe"], 404);
+            }
 
-    /**
-     * Eliminar orden
-     */
-    public function destroy($id)
-    {
-        $orden = Orden::find($id);
+            $area  = $producto->categoria->area ?? 'cocina';
+            $linea = $producto->precio * $item['cantidad'];
 
-        if (!$orden) {
-            return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
+            $existente = OrdenDetalle::where('orden_id', $orden->id)
+                ->where('producto_id', $producto->id)
+                ->where('estado', 'pendiente')
+                ->first();
+
+            if ($existente) {
+                $nuevaCant    = $existente->cantidad + $item['cantidad'];
+                $nuevoSubtotal = $producto->precio * $nuevaCant;
+                $incremento   += ($nuevoSubtotal - $existente->subtotal);
+                $existente->update(['cantidad' => $nuevaCant, 'subtotal' => $nuevoSubtotal]);
+            } else {
+                OrdenDetalle::create([
+                    'orden_id'        => $orden->id,
+                    'producto_id'     => $producto->id,
+                    'cantidad'        => $item['cantidad'],
+                    'precio_unitario' => $producto->precio,
+                    'subtotal'        => $linea,
+                    'cocinero_id'     => null,
+                    'area'            => $area,
+                    'estado'          => 'pendiente',
+                ]);
+                $incremento += $linea;
+            }
         }
 
-        $orden->delete();
+        $nuevoSubtotal = $orden->subtotal + $incremento;
+        $orden->update(['subtotal' => $nuevoSubtotal, 'total' => $nuevoSubtotal]);
 
-        return response()->json(['status' => true, 'message' => 'Orden eliminada']);
+        return response()->json([
+            'status'  => true,
+            'message' => 'Productos agregados correctamente',
+            'data'    => $orden->fresh('mesa', 'cliente', 'detalles.producto'),
+        ]);
     }
 
+    /** GET /ordenes/area/:area */
     public function ordenesPorArea($area)
     {
-        $areas_validas = ['cocina', 'barra'];
-        if (!in_array($area, $areas_validas)) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Área inválida'
-            ], 400);
+        if (!in_array($area, ['cocina', 'barra'])) {
+            return response()->json(['status' => false, 'message' => 'Área inválida'], 400);
         }
-
         $detalles = OrdenDetalle::with(['orden.mesa', 'orden.cliente', 'producto'])
-            ->where('area', $area)
-            ->where('estado', 'pendiente')
-            ->get();
-
-        return response()->json([
-            'status' => true,
-            'data' => $detalles
-        ]);
+            ->where('area', $area)->where('estado', 'pendiente')->get();
+        return response()->json(['status' => true, 'data' => $detalles]);
     }
 
+    /** GET /ordenes/cliente/:cliente_id */
     public function ordenesPorCliente($cliente_id)
     {
-        // Verificar si existe el cliente
-        $cliente = \App\Models\Cliente::find($cliente_id);
+        $cliente = Cliente::find($cliente_id);
         if (!$cliente) {
-            return response()->json([
-                'status' => false,
-                'message' => "Cliente con ID {$cliente_id} no existe"
-            ], 404);
+            return response()->json(['status' => false, 'message' => "Cliente {$cliente_id} no existe"], 404);
         }
-
-        // Traer las órdenes del cliente con detalles y productos
-        $ordenes = \App\Models\Orden::with('mesa', 'detalles.producto')
-            ->where('cliente_id', $cliente_id)
-            ->get();
-
         return response()->json([
             'status' => true,
-            'data' => $ordenes
+            'data'   => Orden::with('mesa', 'detalles.producto')->where('cliente_id', $cliente_id)->get(),
         ]);
     }
 
+    /** GET /ordenes/mesa/:mesa_id */
     public function ordenesPorMesa($mesa_id)
     {
-        // Verificar si existe la mesa
-        $mesa = \App\Models\Mesa::find($mesa_id);
+        $mesa = Mesa::find($mesa_id);
         if (!$mesa) {
-            return response()->json([
-                'status' => false,
-                'message' => "Mesa con ID {$mesa_id} no existe"
-            ], 404);
+            return response()->json(['status' => false, 'message' => "Mesa {$mesa_id} no existe"], 404);
         }
-
-        // Traer las órdenes de la mesa con detalles y productos
-        $ordenes = \App\Models\Orden::with('cliente', 'detalles.producto')
-            ->where('mesa_id', $mesa_id)
-            ->get();
-
         return response()->json([
             'status' => true,
-            'data' => $ordenes
+            'data'   => Orden::with('cliente', 'detalles.producto')
+                ->where('mesa_id', $mesa_id)
+                ->orderByDesc('created_at')
+                ->get(),
         ]);
     }
 
+    /** GET /ordenes/estado/:estado */
     public function ordenesPorEstado($estado)
     {
-        // Validar que el estado sea uno de los permitidos
-        $estadosPermitidos = ['pendiente', 'en_preparacion', 'listo', 'entregado', 'cerrado', 'cancelado'];
-        if (!in_array($estado, $estadosPermitidos)) {
-            return response()->json([
-                'status' => false,
-                'message' => "Estado '{$estado}' no es válido. Los válidos son: " . implode(', ', $estadosPermitidos)
-            ], 400);
+        $validos = ['pendiente', 'en_preparacion', 'listo', 'entregado', 'cerrado', 'cancelado'];
+        if (!in_array($estado, $validos)) {
+            return response()->json(['status' => false, 'message' => "Estado '{$estado}' no válido"], 400);
         }
-
-        // Traer las órdenes con detalles y productos según el estado
-        $ordenes = \App\Models\Orden::with('mesa', 'cliente', 'detalles.producto')
-            ->where('estado', $estado)
-            ->get();
-
         return response()->json([
             'status' => true,
-            'data' => $ordenes
+            'data'   => Orden::with('mesa', 'cliente', 'detalles.producto')->where('estado', $estado)->get(),
         ]);
     }
 
+    /** PUT /ordenes/:id/asignar-mozo */
     public function asignarMozo(Request $request, $id)
     {
-        $request->validate([
-            'mozo_id' => 'required|exists:mozos,id'
-        ]);
-
+        $request->validate(['mozo_id' => 'required|exists:mozos,id']);
         $orden = Orden::find($id);
-
         if (!$orden) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Orden no encontrada'
-            ], 404);
+            return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
         }
-
-        $orden->mozo_id = $request->mozo_id;
-        $orden->save();
-
+        $orden->update(['mozo_id' => $request->mozo_id]);
         return response()->json([
-            'status' => true,
-            'message' => "Mozo asignado correctamente",
-            'data' => $orden->load('mesa', 'cliente', 'detalles.producto', 'mozo')
+            'status'  => true,
+            'message' => 'Mozo asignado correctamente',
+            'data'    => $orden->load('mesa', 'cliente', 'detalles.producto'),
         ]);
     }
 }

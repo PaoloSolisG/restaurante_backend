@@ -112,6 +112,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/ordenes/mesa/{mesa_id}', [OrdenController::class, 'ordenesPorMesa']);
         Route::get('/ordenes/estado/{estado}', [OrdenController::class, 'ordenesPorEstado']);
 
+        Route::post('/ordenes/{id}/detalles',     'agregarDetalles');
         Route::put('/ordenes/{id}/asignar-mozo', [OrdenController::class, 'asignarMozo']);
     });
 
