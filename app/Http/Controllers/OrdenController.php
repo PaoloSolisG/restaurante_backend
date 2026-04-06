@@ -8,6 +8,8 @@ use App\Models\Orden;
 use App\Models\OrdenDetalle;
 use App\Models\Producto;
 use Illuminate\Http\Request;
+use App\Events\OrdenCreada;
+use Illuminate\Support\Carbon;
 
 class OrdenController extends Controller
 {
@@ -17,18 +19,31 @@ class OrdenController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Orden::with('mesa', 'cliente', 'detalles.producto');
+        $query = Orden::with(['mesa', 'cliente', 'detalles.producto']);
 
-        if ($request->filled('mesa_id')) {
-            $query->where('mesa_id', $request->mesa_id);
+        // Filtro por Rango de Fechas
+        if ($request->filled('fecha_inicio') && $request->filled('fecha_fin')) {
+            // Aseguramos que el rango cubra desde las 00:00:00 del inicio hasta las 23:59:59 del fin
+            $inicio = Carbon::parse($request->fecha_inicio)->startOfDay();
+            $fin = Carbon::parse($request->fecha_fin)->endOfDay();
+
+            $query->whereBetween('created_at', [$inicio, $fin]);
+        } else {
+            // Por defecto: Solo lo de hoy
+            $query->whereDate('created_at', Carbon::today());
         }
+
+        // Mantener tus otros filtros
         if ($request->filled('estado')) {
             $query->where('estado', $request->estado);
         }
 
+        $ordenes = $query->orderByDesc('created_at')->get();
+
         return response()->json([
             'status' => true,
-            'data'   => $query->orderByDesc('created_at')->get(),
+            'data'   => $ordenes,
+            'total_periodo' => $ordenes->sum('total')
         ]);
     }
 
@@ -96,6 +111,7 @@ class OrdenController extends Controller
         }
 
         $orden->update(['subtotal' => $subtotal, 'total' => $subtotal]);
+        event(new OrdenCreada($orden->load('mesa', 'cliente', 'detalles.producto')));
 
         return response()->json([
             'status'  => true,
@@ -140,6 +156,11 @@ class OrdenController extends Controller
             $orden->mesa->update(['estado' => 'libre']);
         }
 
+        $orden->load('mesa', 'cliente', 'detalles.producto');
+
+        // 5. 🔥 DISPARAR EL EVENTO (Aquí estaba el fallo)
+        event(new OrdenCreada($orden));
+
         return response()->json([
             'status'  => true,
             'message' => 'Orden actualizada',
@@ -183,33 +204,41 @@ class OrdenController extends Controller
             return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
         }
 
-        if ($orden->estado === 'cerrado') {
-            return response()->json(['status' => false, 'message' => 'La orden ya está cerrada'], 400);
+        if (in_array($orden->estado, ['cerrado', 'cancelado'])) {
+            return response()->json(['status' => false, 'message' => "La orden ya está {$orden->estado}"], 400);
         }
 
-        if ($orden->estado === 'cancelado') {
-            return response()->json(['status' => false, 'message' => 'No se puede cerrar una orden cancelada'], 400);
-        }
+        // Usamos una transacción (como mencionaste que estás testeando transacciones)
+        return \Illuminate\Support\Facades\DB::transaction(function () use ($orden) {
 
-        // Recalcular total por si acaso (seguridad)
-        $subtotalReal = $orden->detalles->sum(fn($d) => $d->subtotal);
+            $subtotalReal = $orden->detalles->sum('subtotal');
 
-        $orden->update([
-            'estado'   => 'cerrado',
-            'subtotal' => $subtotalReal,
-            'total'    => $subtotalReal,
-        ]);
+            // 1. Actualizar orden
+            $orden->update([
+                'estado'   => 'cerrado',
+                'subtotal' => $subtotalReal,
+                'total'    => $subtotalReal,
+            ]);
 
-        // Liberar la mesa
-        if ($orden->mesa) {
-            $orden->mesa->update(['estado' => 'libre']);
-        }
+            // 2. Liberar la mesa
+            if ($orden->mesa) {
+                $orden->mesa->update(['estado' => 'libre']);
+            }
 
-        return response()->json([
-            'status'  => true,
-            'message' => "Orden #{$orden->id} cerrada. Mesa {$orden->mesa?->numero} liberada.",
-            'data'    => $orden->fresh('mesa', 'cliente', 'detalles.producto'),
-        ]);
+            // 3. RECARGAR RELACIONES (CRUCIAL)
+            // Cargamos la mesa para que el objeto lleve el estado "libre" al frontend
+            $orden->load('mesa', 'cliente', 'detalles.producto');
+
+            // 4. DISPARAR EVENTO REVERB / ECHO
+            // El frontend recibirá este evento y verá que la mesa asociada ahora es 'libre'
+            event(new \App\Events\OrdenCreada($orden));
+
+            return response()->json([
+                'status'  => true,
+                'message' => "Orden #{$orden->id} cerrada. Mesa {$orden->mesa?->numero} liberada.",
+                'data'    => $orden,
+            ]);
+        });
     }
 
     // ──────────────────────────────────────────────────────────

@@ -97,4 +97,27 @@ class AuthController extends Controller
             'message' => 'Todas las sesiones han sido cerradas'
         ]);
     }
+
+
+    // ─── Logout solo el token actual ─────────────────────────────────
+    // POST /api/logout/current
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json([
+            'status'  => true,
+            'message' => 'Sesión cerrada correctamente',
+        ]);
+    }
+
+    // ─── Verificar token (útil para el frontend al recargar) ─────────
+    // GET /api/me
+    public function me(Request $request)
+    {
+        return response()->json([
+            'status' => true,
+            'user'   => $request->user(),
+        ]);
+    }
 }

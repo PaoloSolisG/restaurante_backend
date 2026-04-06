@@ -9,6 +9,7 @@ use App\Http\Controllers\MesaController;
 use App\Http\Controllers\MozoController;
 use App\Http\Controllers\OrdenController;
 use App\Http\Controllers\ProductoController;
+use App\Http\Controllers\UsuarioController;
 
 /*
 |--------------------------------------------------------------------------
@@ -39,6 +40,25 @@ Route::post('/login', [AuthController::class, 'login']);
 */
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logoutAll']);
+    Route::post('/logout/current', [AuthController::class, 'logout']);
+    Route::get('/me',             [AuthController::class, 'me']);
+
+    // ── Perfil del usuario autenticado ────────────────────────────────
+    Route::get('/perfil', [UsuarioController::class, 'perfil']);
+    Route::put('/perfil', [UsuarioController::class, 'actualizarPerfil']);
+
+
+    // ── CRUD Usuarios ─────────────────────────────────────────────────
+    Route::controller(UsuarioController::class)->prefix('usuarios')->group(function () {
+        Route::get('/',         'index');       // GET    /api/usuarios  (?rol= ?search=)
+        Route::post('/',         'store');       // POST   /api/usuarios
+        Route::get('/{id}',     'show');        // GET    /api/usuarios/5
+        Route::put('/{id}',     'update');      // PUT    /api/usuarios/5
+        Route::patch('/{id}/rol', 'cambiarRol'); // PATCH  /api/usuarios/5/rol
+        Route::delete('/{id}',     'destroy');     // DELETE /api/usuarios/5
+    });
+
+
     /*
     |--------------------------------------------------------------------------
     | CRUD Categorías
