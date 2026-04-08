@@ -19,21 +19,17 @@ class OrdenController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Orden::with(['mesa', 'cliente', 'detalles.producto']);
+        $query = Orden::with(['mesa', 'cliente', 'mozo', 'detalles.producto']);
 
-        // Filtro por Rango de Fechas
+        // Filtro por Rango de Fechas (Solo si se envían)
         if ($request->filled('fecha_inicio') && $request->filled('fecha_fin')) {
-            // Aseguramos que el rango cubra desde las 00:00:00 del inicio hasta las 23:59:59 del fin
             $inicio = Carbon::parse($request->fecha_inicio)->startOfDay();
             $fin = Carbon::parse($request->fecha_fin)->endOfDay();
-
             $query->whereBetween('created_at', [$inicio, $fin]);
-        } else {
-            // Por defecto: Solo lo de hoy
-            $query->whereDate('created_at', Carbon::today());
         }
+        // Quitamos el "else" para que no restrinja a "solo hoy" por defecto
 
-        // Mantener tus otros filtros
+        // Mantener otros filtros
         if ($request->filled('estado')) {
             $query->where('estado', $request->estado);
         }

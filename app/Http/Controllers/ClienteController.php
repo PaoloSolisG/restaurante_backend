@@ -27,7 +27,7 @@ class ClienteController extends Controller
             'tipo_identificador' => 'required|in:DNI,RUC',
             'identificador'      => 'required|unique:clientes',
             'nombre'             => 'required|string',
-            'apellido'           => 'required|string',
+            'apellido'           => $request->tipo_identificador === 'RUC' ? 'nullable|string' : 'required|string',
             'email'              => 'nullable|email|unique:clientes,email',
             'telefono'           => 'nullable|string',
             'direccion'          => 'nullable|string',

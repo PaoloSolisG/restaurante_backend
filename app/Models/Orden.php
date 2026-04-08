@@ -11,6 +11,7 @@ class Orden extends Model
     protected $fillable = [
         'mesa_id',
         'cliente_id',
+        'mozo_id',
         'tipo_consumo',
         'estado',
         'notas',

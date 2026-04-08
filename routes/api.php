@@ -10,6 +10,7 @@ use App\Http\Controllers\MozoController;
 use App\Http\Controllers\OrdenController;
 use App\Http\Controllers\ProductoController;
 use App\Http\Controllers\UsuarioController;
+use App\Http\Controllers\VentaController;
 
 /*
 |--------------------------------------------------------------------------
@@ -42,6 +43,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logoutAll']);
     Route::post('/logout/current', [AuthController::class, 'logout']);
     Route::get('/me',             [AuthController::class, 'me']);
+
+    //apis de consulta reniec y sunat
+    Route::post('/consulta/dni', [App\Http\Controllers\ConsultaController::class, 'consultarDNI']);
+    Route::post('/consulta/ruc', [App\Http\Controllers\ConsultaController::class, 'consultarRUC']);
 
     // ── Perfil del usuario autenticado ────────────────────────────────
     Route::get('/perfil', [UsuarioController::class, 'perfil']);
@@ -161,5 +166,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/mozos/{id}', 'show');
         Route::put('/mozos/{id}', 'update');
         Route::delete('/mozos/{id}', 'destroy');
+    });
+
+
+
+
+    /*
+|--------------------------------------------------------------------------
+| Ventas
+|--------------------------------------------------------------------------
+*/
+    Route::controller(VentaController::class)->group(function () {
+        Route::get('/ventas',      'index');
+        Route::post('/ventas',     'store');
+        Route::get('/ventas/{id}', 'show');
     });
 });
