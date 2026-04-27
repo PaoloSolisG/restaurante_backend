@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Caja;
+use App\Models\CajaMovimiento;
 use App\Models\Orden;
 use App\Models\Venta;
 use App\Models\VentaDetalle;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 class VentaController extends Controller
@@ -59,7 +62,7 @@ class VentaController extends Controller
 
     /**
      * POST /ventas
-     * Convierte una orden cerrada en venta
+     * Convierte una orden cerrada en venta y registra movimiento en caja
      */
     public function store(Request $request)
     {
@@ -71,6 +74,15 @@ class VentaController extends Controller
             'descuento'      => 'nullable|numeric|min:0',
             'pagos_detalle'  => 'nullable|array',
         ]);
+
+        // ── Verificar caja abierta ────────────────────────────
+        $caja = Caja::where('estado', 'abierta')->latest()->first();
+        if (!$caja) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'No hay caja abierta. Abre la caja antes de registrar ventas.'
+            ], 400);
+        }
 
         $orden = Orden::with('detalles.producto')->find($request->orden_id);
 
@@ -88,17 +100,19 @@ class VentaController extends Controller
             ], 400);
         }
 
-        return DB::transaction(function () use ($request, $orden) {
-            $IGV_DIV        = 1.105;
-            $propina        = $request->propina ?? 0;
-            $descuento      = $request->descuento ?? 0;
-            $baseImponible  = round($orden->total / $IGV_DIV, 2);
-            $igv            = round($orden->total - $baseImponible, 2);
-            $total          = round($orden->total + $propina - $descuento, 2);
-            $vuelto         = max(0, round($request->monto_recibido - $total, 2));
+        return DB::transaction(function () use ($request, $orden, $caja) {
+            $IGV_DIV       = 1.105;
+            $propina       = $request->propina ?? 0;
+            $descuento     = $request->descuento ?? 0;
+            $baseImponible = round($orden->total / $IGV_DIV, 2);
+            $igv           = round($orden->total - $baseImponible, 2);
+            $total         = round($orden->total + $propina - $descuento, 2);
+            $vuelto        = max(0, round($request->monto_recibido - $total, 2));
 
+            // 1. Crear la venta vinculada a la caja
             $venta = Venta::create([
                 'orden_id'       => $orden->id,
+                'caja_id'        => $caja->id,
                 'mesa_id'        => $orden->mesa_id,
                 'cliente_id'     => $orden->cliente_id,
                 'mozo_id'        => $orden->mozo_id,
@@ -115,7 +129,7 @@ class VentaController extends Controller
                 'notas'          => $orden->notas,
             ]);
 
-            // Snapshot de productos
+            // 2. Snapshot de productos
             foreach ($orden->detalles as $detalle) {
                 VentaDetalle::create([
                     'venta_id'        => $venta->id,
@@ -127,6 +141,18 @@ class VentaController extends Controller
                     'subtotal'        => $detalle->subtotal,
                 ]);
             }
+
+            // 3. Registrar movimiento en caja
+            CajaMovimiento::create([
+                'caja_id'     => $caja->id,
+                'usuario_id'  => Auth::id(),
+                'venta_id'    => $venta->id,
+                'tipo'        => 'ingreso',
+                'concepto'    => 'venta',
+                'descripcion' => "Venta #{$venta->id} - Orden #{$orden->id}",
+                'monto'       => $total,
+                'metodo_pago' => $request->metodo_pago,
+            ]);
 
             return response()->json([
                 'status'  => true,

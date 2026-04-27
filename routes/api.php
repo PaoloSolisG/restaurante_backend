@@ -170,6 +170,22 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 
+    /*
+|--------------------------------------------------------------------------
+| Caja
+|--------------------------------------------------------------------------
+*/
+    Route::controller(\App\Http\Controllers\CajaController::class)->group(function () {
+        Route::get('/caja/estado',         'estado');
+        Route::post('/caja/abrir',         'abrir');
+        Route::post('/caja/cerrar',        'cerrar');
+        Route::post('/caja/movimiento',    'movimiento');
+        Route::get('/caja/historial',      'historial');
+        Route::get('/caja/{id}',           'show');
+    });
+
+
+
 
     /*
 |--------------------------------------------------------------------------
