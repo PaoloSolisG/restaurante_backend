@@ -28,24 +28,28 @@ class FacturacionService
 
     private function tenantFacturacionConfig(): array
     {
-        if (!function_exists('tenant') || !tenant()) {
-            Log::error('tenantFacturacionConfig: tenant() es null');
-            return [];
-        }
-
         try {
-            $raw = DB::connection('central')
+            // Derive tenant key from the current mysql DB name
+            // (DatabaseTenancyBootstrapper sets it to 'restaurante_{tenantId}')
+            $db     = config('database.connections.mysql.database', '');
+            $prefix = config('tenancy.database.prefix', 'restaurante_');
+
+            if (!str_starts_with($db, $prefix)) {
+                return [];
+            }
+
+            $tenantKey = substr($db, strlen($prefix));
+
+            $raw  = DB::connection('central')
                 ->table('tenants')
-                ->where('id', tenant()->getTenantKey())
+                ->where('id', $tenantKey)
                 ->value('data');
 
             $data = json_decode($raw ?? '{}', true);
             return $data['facturacion'] ?? [];
+
         } catch (\Throwable $e) {
-            Log::error('tenantFacturacionConfig falló', [
-                'error' => $e->getMessage(),
-                'tenant' => tenant()?->getTenantKey(),
-            ]);
+            Log::error('tenantFacturacionConfig falló', ['error' => $e->getMessage()]);
             return [];
         }
     }
