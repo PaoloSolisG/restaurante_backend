@@ -16,11 +16,16 @@ class FacturacionService
 
     public function __construct()
     {
-        $this->baseUrl      = rtrim(config('facturacion.base_url'), '/');
-        $this->token        = config('facturacion.token');
-        $this->rucEmisor    = config('facturacion.ruc_emisor');
-        $this->serieBoleta  = config('facturacion.serie_boleta');
-        $this->serieFactura = config('facturacion.serie_factura');
+        // Lee config del tenant actual; cae al .env como fallback
+        $cfg = (function_exists('tenant') && tenant())
+            ? (tenant()->data['facturacion'] ?? [])
+            : [];
+
+        $this->baseUrl      = rtrim($cfg['api_url']       ?? config('facturacion.base_url'),    '/');
+        $this->token        = $cfg['token']               ?? config('facturacion.token');
+        $this->rucEmisor    = $cfg['ruc_emisor']          ?? config('facturacion.ruc_emisor');
+        $this->serieBoleta  = $cfg['serie_boleta']        ?? config('facturacion.serie_boleta');
+        $this->serieFactura = $cfg['serie_factura']       ?? config('facturacion.serie_factura');
     }
 
     /** Verifica conexión con la API de Naniva */

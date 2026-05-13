@@ -18,6 +18,7 @@ use App\Http\Controllers\FacturacionController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\AuditLogController;
 use App\Http\Controllers\CajaController;
+use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\ConsultaController;
 
 Route::middleware(['api', InitializeTenancyOptional::class])->group(function () {
@@ -38,6 +39,10 @@ Route::middleware(['api', InitializeTenancyOptional::class])->group(function () 
         // Consultas externas
         Route::post('/api/consulta/dni', [ConsultaController::class, 'consultarDNI']);
         Route::post('/api/consulta/ruc', [ConsultaController::class, 'consultarRUC']);
+
+        // Configuración del tenant (solo admin)
+        Route::get('/api/configuracion',  [ConfiguracionController::class, 'show']);
+        Route::put('/api/configuracion',  [ConfiguracionController::class, 'update']);
 
         // Perfil
         Route::get('/api/perfil', [UsuarioController::class, 'perfil']);
