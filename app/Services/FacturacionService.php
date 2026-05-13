@@ -164,8 +164,8 @@ class FacturacionService
     public function getXml(string $filename): array
     {
         try {
-            $response = $this->client()->get("/comprobantes/{$filename}/xml", ['format' => 'raw']);
-            Log::info('getXml response', [
+            $response = $this->downloadClient()->get("/comprobantes/{$filename}/xml", ['format' => 'raw']);
+            Log::error('getXml debug', [
                 'filename' => $filename,
                 'status'   => $response->status(),
                 'body'     => substr($response->body(), 0, 500),
@@ -190,8 +190,8 @@ class FacturacionService
     public function getCdr(string $filename): array
     {
         try {
-            $response = $this->client()->get("/comprobantes/{$filename}/cdr", ['format' => 'raw']);
-            Log::info('getCdr response', [
+            $response = $this->downloadClient()->get("/comprobantes/{$filename}/cdr", ['format' => 'raw']);
+            Log::error('getCdr debug', [
                 'filename' => $filename,
                 'status'   => $response->status(),
                 'body'     => substr($response->body(), 0, 500),
@@ -453,6 +453,14 @@ class FacturacionService
                 'Accept'       => 'application/json',
             ])
             ->asJson()
+            ->timeout(15);
+    }
+
+    private function downloadClient()
+    {
+        return Http::baseUrl($this->baseUrl)
+            ->withToken($this->token)
+            ->withHeaders(['X-Emisor-RUC' => $this->rucEmisor])
             ->timeout(15);
     }
 
