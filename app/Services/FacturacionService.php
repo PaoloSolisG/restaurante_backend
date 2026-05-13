@@ -165,17 +165,24 @@ class FacturacionService
     {
         try {
             $response = $this->client()->get("/comprobantes/{$filename}/xml", ['format' => 'raw']);
+            Log::info('getXml response', [
+                'filename' => $filename,
+                'status'   => $response->status(),
+                'body'     => substr($response->body(), 0, 500),
+                'baseUrl'  => $this->baseUrl,
+                'ruc'      => $this->rucEmisor,
+            ]);
             if ($response->successful()) {
                 $body = $response->body();
-                // Si devuelve JSON (sin ?format=raw), extraer el content
                 $json = json_decode($body, true);
                 if (json_last_error() === JSON_ERROR_NONE && isset($json['data']['content'])) {
                     $body = $json['data']['content'];
                 }
                 return ['success' => true, 'xml' => $body];
             }
-            return ['success' => false, 'error' => 'No se pudo obtener el XML'];
+            return ['success' => false, 'error' => 'HTTP ' . $response->status() . ': ' . substr($response->body(), 0, 200)];
         } catch (\Throwable $e) {
+            Log::error('getXml excepción', ['filename' => $filename, 'msg' => $e->getMessage()]);
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
@@ -184,17 +191,22 @@ class FacturacionService
     {
         try {
             $response = $this->client()->get("/comprobantes/{$filename}/cdr", ['format' => 'raw']);
+            Log::info('getCdr response', [
+                'filename' => $filename,
+                'status'   => $response->status(),
+                'body'     => substr($response->body(), 0, 500),
+            ]);
             if ($response->successful()) {
                 $body = $response->body();
-                // Si devuelve JSON, extraer el content
                 $json = json_decode($body, true);
                 if (json_last_error() === JSON_ERROR_NONE && isset($json['data']['content'])) {
                     $body = $json['data']['content'];
                 }
                 return ['success' => true, 'cdr_base64' => base64_encode($body)];
             }
-            return ['success' => false, 'error' => 'No se pudo obtener el CDR'];
+            return ['success' => false, 'error' => 'HTTP ' . $response->status() . ': ' . substr($response->body(), 0, 200)];
         } catch (\Throwable $e) {
+            Log::error('getCdr excepción', ['filename' => $filename, 'msg' => $e->getMessage()]);
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
