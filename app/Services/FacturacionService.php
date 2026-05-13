@@ -33,8 +33,7 @@ class FacturacionService
         }
 
         try {
-            $centralConn = config('tenancy.database.central_connection', 'mysql');
-            $raw = DB::connection($centralConn)
+            $raw = DB::connection('central')
                 ->table('tenants')
                 ->where('id', tenant()->getTenantKey())
                 ->value('data');
