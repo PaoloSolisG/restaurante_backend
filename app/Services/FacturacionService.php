@@ -164,9 +164,15 @@ class FacturacionService
     public function getXml(string $filename): array
     {
         try {
-            $response = $this->client()->get("/comprobantes/{$filename}/xml");
+            $response = $this->client()->get("/comprobantes/{$filename}/xml", ['format' => 'raw']);
             if ($response->successful()) {
-                return ['success' => true, 'xml' => $response->body()];
+                $body = $response->body();
+                // Si devuelve JSON (sin ?format=raw), extraer el content
+                $json = json_decode($body, true);
+                if (json_last_error() === JSON_ERROR_NONE && isset($json['data']['content'])) {
+                    $body = $json['data']['content'];
+                }
+                return ['success' => true, 'xml' => $body];
             }
             return ['success' => false, 'error' => 'No se pudo obtener el XML'];
         } catch (\Throwable $e) {
@@ -177,9 +183,15 @@ class FacturacionService
     public function getCdr(string $filename): array
     {
         try {
-            $response = $this->client()->get("/comprobantes/{$filename}/cdr");
+            $response = $this->client()->get("/comprobantes/{$filename}/cdr", ['format' => 'raw']);
             if ($response->successful()) {
-                return ['success' => true, 'cdr_base64' => base64_encode($response->body())];
+                $body = $response->body();
+                // Si devuelve JSON, extraer el content
+                $json = json_decode($body, true);
+                if (json_last_error() === JSON_ERROR_NONE && isset($json['data']['content'])) {
+                    $body = $json['data']['content'];
+                }
+                return ['success' => true, 'cdr_base64' => base64_encode($body)];
             }
             return ['success' => false, 'error' => 'No se pudo obtener el CDR'];
         } catch (\Throwable $e) {
