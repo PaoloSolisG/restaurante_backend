@@ -33,15 +33,15 @@ class FacturacionService
         }
 
         try {
-            $centralConn = config('tenancy.database.central_connection', 'mysql');
-            $raw = DB::connection($centralConn)
+            $raw = DB::connection('central')
                 ->table('tenants')
                 ->where('id', tenant()->getTenantKey())
                 ->value('data');
 
             $data = json_decode($raw ?? '{}', true);
             return $data['facturacion'] ?? [];
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            Log::error('tenantFacturacionConfig error', ['msg' => $e->getMessage()]);
             return [];
         }
     }
