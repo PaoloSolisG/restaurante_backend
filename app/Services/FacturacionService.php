@@ -29,6 +29,7 @@ class FacturacionService
     private function tenantFacturacionConfig(): array
     {
         if (!function_exists('tenant') || !tenant()) {
+            Log::error('tenantFacturacionConfig: tenant() es null');
             return [];
         }
 
