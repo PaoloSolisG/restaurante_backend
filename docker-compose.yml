@@ -25,6 +25,20 @@ services:
       - restaurante-net
       - proxy-network   # NPM alcanza este contenedor por nombre
 
+  reverb:
+    build: .
+    container_name: restaurante-reverb
+    restart: unless-stopped
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080 --no-interaction
+    volumes:
+      - ./storage:/var/www/storage
+      - ./.env:/var/www/.env
+    depends_on:
+      - mysql
+    networks:
+      - restaurante-net
+      - proxy-network   # NPM alcanza este contenedor para el proxy WS
+
   mysql:
     image: mysql:8.0
     container_name: restaurante-mysql
