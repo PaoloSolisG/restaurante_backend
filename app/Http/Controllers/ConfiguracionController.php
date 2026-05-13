@@ -3,18 +3,29 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ConfiguracionController extends Controller
 {
+    private function centralConn(): string
+    {
+        return config('tenancy.database.central_connection', 'mysql');
+    }
+
     public function show()
     {
         $t    = tenant();
-        $data = $t->data ?? [];
+        $row  = DB::connection($this->centralConn())
+                    ->table('tenants')
+                    ->where('id', $t->getTenantKey())
+                    ->first();
+
+        $data = json_decode($row->data ?? '{}', true) ?? [];
 
         return response()->json([
             'restaurante' => [
-                'nombre' => $t->nombre,
-                'email'  => $t->email,
+                'nombre' => $row->nombre ?? '',
+                'email'  => $row->email  ?? '',
             ],
             'facturacion' => array_merge([
                 'api_url'       => 'https://fe.naniva.cloud/api/v1',
@@ -42,21 +53,27 @@ class ConfiguracionController extends Controller
             'facturacion.serie_factura' => 'sometimes|string|max:10',
         ]);
 
-        $t = tenant();
+        $conn     = $this->centralConn();
+        $tenantId = tenant()->getTenantKey();
+
+        $row      = DB::connection($conn)->table('tenants')->where('id', $tenantId)->first();
+        $data     = json_decode($row->data ?? '{}', true) ?? [];
+        $updates  = [];
 
         if ($request->has('restaurante')) {
             $rest = $request->input('restaurante');
-            if (isset($rest['nombre'])) $t->nombre = $rest['nombre'];
-            if (isset($rest['email']))  $t->email  = $rest['email'];
+            if (isset($rest['nombre'])) $updates['nombre'] = $rest['nombre'];
+            if (isset($rest['email']))  $updates['email']  = $rest['email'];
         }
 
         if ($request->has('facturacion')) {
-            $data = $t->data ?? [];
             $data['facturacion'] = array_merge($data['facturacion'] ?? [], $request->input('facturacion'));
-            $t->data = $data;
+            $updates['data']     = json_encode($data);
         }
 
-        $t->save();
+        if (!empty($updates)) {
+            DB::connection($conn)->table('tenants')->where('id', $tenantId)->update($updates);
+        }
 
         return response()->json(['message' => 'Configuración guardada correctamente']);
     }
