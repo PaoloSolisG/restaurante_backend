@@ -468,7 +468,6 @@ class FacturacionService
     {
         return Http::baseUrl($this->baseUrl)
             ->withToken($this->token)
-            ->withHeaders(['X-Emisor-RUC' => $this->rucEmisor])
             ->timeout(15);
     }
 
