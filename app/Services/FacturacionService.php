@@ -1,0 +1,450 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\Venta;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+
+class FacturacionService
+{
+    private string $baseUrl;
+    private string $token;
+    private string $rucEmisor;
+    private string $serieBoleta;
+    private string $serieFactura;
+
+    public function __construct()
+    {
+        $this->baseUrl      = rtrim(config('facturacion.base_url'), '/');
+        $this->token        = config('facturacion.token');
+        $this->rucEmisor    = config('facturacion.ruc_emisor');
+        $this->serieBoleta  = config('facturacion.serie_boleta');
+        $this->serieFactura = config('facturacion.serie_factura');
+    }
+
+    /** Verifica conexión con la API de Naniva */
+    public function status(): array
+    {
+        try {
+            $response = $this->client()->get('/status');
+            return ['ok' => $response->successful(), 'data' => $response->json()];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Emite un comprobante electrónico para una venta.
+     */
+    public function emitir(Venta $venta): array
+    {
+        $venta->loadMissing(['cliente', 'detalles']);
+
+        [$tipoDoc, $serie] = $this->resolverTipoYSerie($venta);
+        $clienteData       = $this->buildClienteData($venta);
+
+        $payload = [
+            'tipo_documento' => $tipoDoc,
+            'cabecera'       => [
+                'FECHA_EMISION'          => $venta->created_at->format('Y-m-d'),
+                'CLIENTE_NRO_DOCUMENTO'  => $clienteData['numero'],
+                'CLIENTE_TIPO_IDENTIDAD' => $clienteData['tipo'],
+                'CLIENTE_NOMBRE'         => $clienteData['nombre'],
+                'CODIGO_MONEDA'          => 'PEN',
+                'TOTAL_GRAVADAS'         => number_format((float) $venta->base_imponible, 2, '.', ''),
+                'TOTAL_TRIBUTO_IGV'      => number_format((float) $venta->igv,            2, '.', ''),
+                'TOTAL_VENTA'            => number_format((float) $venta->total,           2, '.', ''),
+            ],
+            'detalles' => $this->buildDetalles($venta),
+        ];
+
+        try {
+            $response = $this->client()->post('/emitir', $payload);
+            $body     = $response->json();
+
+            Log::info('Naniva response', ['venta_id' => $venta->id, 'status' => $response->status(), 'body' => $body]);
+
+            if ($response->successful() && ($body['success'] ?? false)) {
+                return [
+                    'success'            => true,
+                    'tipo_comprobante'   => $tipoDoc,
+                    'serie_comprobante'  => $serie,
+                    'numero_comprobante' => $body['data']['numero']   ?? null,
+                    'filename'           => $body['data']['filename']
+                        ?? ($body['data']['numero']
+                            ? "{$this->rucEmisor}-{$tipoDoc}-{$body['data']['numero']}"
+                            : null),
+                    'estado_sunat'       => $body['data']['estado']   ?? null,
+                    'error'              => null,
+                ];
+            }
+
+            $errorMsg = $body['message'] ?? 'Error desconocido al emitir comprobante';
+            Log::error('Naniva emitir fallido', ['venta_id' => $venta->id, 'payload' => $payload, 'response' => $body]);
+            return ['success' => false, 'error' => $errorMsg];
+        } catch (\Throwable $e) {
+            Log::error('Naniva excepción', ['venta_id' => $venta->id, 'msg' => $e->getMessage()]);
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Descarga el PDF de un comprobante como base64.
+     */
+    public function getPdf(string $filename): array
+    {
+        try {
+            $response = $this->client()->get("/comprobantes/{$filename}/pdf", [
+                'mode'       => 'base64',
+                'ruc_emisor' => $this->rucEmisor,
+            ]);
+
+            if ($response->successful()) {
+                // Intentar JSON primero (por si Naniva cambia el formato)
+                $body = $response->json();
+                if ($body && !empty($body['data']['pdf_base64'])) {
+                    return ['success' => true, 'pdf_base64' => $body['data']['pdf_base64']];
+                }
+
+                // Naniva devuelve bytes crudos → convertir a base64
+                return ['success' => true, 'pdf_base64' => base64_encode($response->body())];
+            }
+
+            return ['success' => false, 'error' => 'No se pudo obtener el PDF — status: ' . $response->status()];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+
+    /**
+     * Reenvía un comprobante a SUNAT.
+     */
+    public function reenviar(string|int $comprobanteId): array
+    {
+        try {
+            $response = $this->client()->post("/comprobantes/{$comprobanteId}/enviar");
+            $body     = $response->json();
+
+            return [
+                'success' => $response->successful() && ($body['success'] ?? false),
+                'data'    => $body,
+                'error'   => $response->successful() ? null : ($body['message'] ?? 'Error al reenviar'),
+            ];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+
+    public function getXml(string $filename): array
+    {
+        try {
+            $response = $this->client()->get("/comprobantes/{$filename}/xml");
+            if ($response->successful()) {
+                return ['success' => true, 'xml' => $response->body()];
+            }
+            return ['success' => false, 'error' => 'No se pudo obtener el XML'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    public function getCdr(string $filename): array
+    {
+        try {
+            $response = $this->client()->get("/comprobantes/{$filename}/cdr");
+            if ($response->successful()) {
+                return ['success' => true, 'cdr_base64' => base64_encode($response->body())];
+            }
+            return ['success' => false, 'error' => 'No se pudo obtener el CDR'];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    public function consultarEstado(string $filename): array
+    {
+        try {
+            $response = $this->client()->post('/consultar-estado', ['filename' => $filename]);
+            $body = $response->json();
+            return [
+                'success' => $response->successful() && ($body['success'] ?? false),
+                'data'    => $body['data'] ?? null,
+                'error'   => $response->successful() ? null : ($body['message'] ?? 'Error al consultar'),
+            ];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+
+    /**
+     * Dar de baja un comprobante ante SUNAT.
+     * - Factura (01): genera RA (Comunicación de Baja / VoidedDocuments)
+     * - Boleta  (03): genera RC (Resumen de Comprobantes con ESTADO_ITEM=3)
+     */
+    public function darBaja(Venta $venta, string $motivo): array
+    {
+        if (!$venta->tipo_comprobante || !$venta->serie_comprobante || !$venta->numero_comprobante) {
+            return ['success' => false, 'error' => 'La venta no tiene comprobante emitido para dar de baja'];
+        }
+
+        $venta->loadMissing(['cliente', 'detalles']);
+
+        // Extraer solo el correlativo numérico (ej: "B001-2" → "2")
+        $partes = explode('-', $venta->numero_comprobante);
+        $correlativoNum = end($partes);
+
+        $esFactura = $venta->tipo_comprobante === '01';
+
+        $payload = $esFactura
+            ? $this->buildPayloadRA($venta, $correlativoNum, $motivo)
+            : $this->buildPayloadRC($venta, $motivo);
+
+        try {
+            $response = $this->client()->post('/dar-baja', $payload);
+            $body     = $response->json();
+
+            Log::info('Naniva dar-baja', [
+                'venta_id'  => $venta->id,
+                'tipo'      => $esFactura ? 'RA' : 'RC',
+                'status'    => $response->status(),
+                'body'      => $body,
+            ]);
+
+            if ($response->successful() && ($body['success'] ?? false)) {
+                $sunat       = $body['data']['sunat'] ?? [];
+                $fechaBaja   = now()->format('Y-m-d');
+                return [
+                    'success'          => true,
+                    'tipo_baja'        => $esFactura ? 'RA' : 'RC',
+                    'mensaje'          => $body['message'] ?? 'Comprobante dado de baja correctamente',
+                    'sunat'            => $sunat,
+                    'ticket'           => $sunat['TICKET'] ?? null,
+                    'fecha_baja'       => $fechaBaja,
+                    'correlativo_baja' => '1',
+                    'estado_baja'      => ($sunat['CODIGO'] ?? '') === '0' ? 'Pendiente' : 'Procesado',
+                ];
+            }
+
+            $errorMsg = $body['message'] ?? 'Error desconocido al dar de baja';
+            Log::error('Naniva dar-baja fallido', ['venta_id' => $venta->id, 'payload' => $payload, 'response' => $body]);
+            return ['success' => false, 'error' => $errorMsg];
+
+        } catch (\Throwable $e) {
+            Log::error('Naniva dar-baja excepción', ['venta_id' => $venta->id, 'msg' => $e->getMessage()]);
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Consulta el estado de un ticket de baja (RA/RC) ante SUNAT.
+     * Endpoint Naniva: POST /consultar-estado
+     */
+    public function consultarTicketBaja(string $ticket, string $fechaBaja, string $correlativoBaja, bool $isAnulado = false): array
+    {
+        try {
+            $payload = [
+                'ticket'     => $ticket,
+                'is_anulado' => $isAnulado,
+                'cabecera'   => [
+                    'FECHA_EMISION' => $fechaBaja,
+                    'CORRELATIVO'   => $correlativoBaja,
+                ],
+            ];
+
+            $response = $this->client()->post('/consultar-estado', $payload);
+            $body     = $response->json();
+
+            Log::info('Naniva consultar-ticket', ['ticket' => $ticket, 'status' => $response->status(), 'body' => $body]);
+
+            if ($response->successful() && ($body['success'] ?? false)) {
+                $sunat     = $body['data']['sunat'] ?? [];
+                $codigo    = $sunat['CODIGO'] ?? '';
+                // Código 0 = aceptado, 9999 = sin respuesta aún (beta/pendiente)
+                $estadoBaja = match(true) {
+                    $codigo === '0'    => 'Aceptado',
+                    $codigo === '9999' => 'Pendiente',
+                    default            => 'Rechazado',
+                };
+
+                return [
+                    'success'    => true,
+                    'estado_baja' => $estadoBaja,
+                    'codigo'     => $codigo,
+                    'mensaje'    => $sunat['MENSAJE'] ?? '',
+                    'hash_cdr'   => $sunat['HASH_CDR'] ?? null,
+                ];
+            }
+
+            return ['success' => false, 'error' => $body['message'] ?? 'Error al consultar ticket'];
+        } catch (\Throwable $e) {
+            Log::error('Naniva consultar-ticket excepción', ['ticket' => $ticket, 'msg' => $e->getMessage()]);
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    private function buildPayloadRA(Venta $venta, string $correlativoNum, string $motivo): array
+    {
+        return [
+            'cabecera' => [
+                'FECHA_EMISION'    => now()->format('Y-m-d'),
+                'FECHA_REFERENCIA' => $venta->created_at->format('Y-m-d'),
+                'NUMERO_DOCUMENTO' => '1',
+            ],
+            'detalles' => [[
+                'TIPO_DOCUMENTO'        => '01',
+                'DOCUMENTO_BAJA_SERIE'  => $venta->serie_comprobante,
+                'DOCUMENTO_BAJA_NUMERO' => $correlativoNum,
+                'BAJA_DESCRIPCION'      => strtoupper($motivo),
+            ]],
+        ];
+    }
+
+    private function buildPayloadRC(Venta $venta, string $motivo): array
+    {
+        $cliente = $venta->cliente;
+        $clienteNombre  = $cliente ? strtoupper(trim($cliente->nombre . ' ' . ($cliente->apellido ?? ''))) : 'ANONIMO';
+        $clienteNumero  = $cliente?->identificador ?? '11111111';
+        $clienteTipo    = $cliente ? (['DNI' => '1', 'RUC' => '6'][$cliente->tipo_identificador] ?? '1') : '1';
+
+        return [
+            'cabecera' => [
+                'FECHA_EMISION'    => now()->format('Y-m-d'),
+                'FECHA_REFERENCIA' => $venta->created_at->format('Y-m-d'),
+                'CORRELATIVO'      => '1',
+            ],
+            'detalles' => [[
+                'TIPO_DOCUMENTO'         => '03',
+                'NUMERO_DOCUMENTO'       => $venta->numero_comprobante,
+                'ESTADO_ITEM'            => '3',
+                'CLIENTE_NOMBRE'         => $clienteNombre,
+                'CLIENTE_NRO_DOCUMENTO'  => $clienteNumero,
+                'CLIENTE_TIPO_IDENTIDAD' => $clienteTipo,
+                'CODIGO_MONEDA'          => 'PEN',
+                'TOTAL_VENTA'            => number_format((float) $venta->total,           2, '.', ''),
+                'TOTAL_GRAVADAS'         => number_format((float) $venta->base_imponible,  2, '.', ''),
+                'TOTAL_TRIBUTO_IGV'      => number_format((float) $venta->igv,             2, '.', ''),
+            ]],
+        ];
+    }
+
+    /**
+     * Emite una Nota de Crédito (07) que anula legalmente el comprobante original.
+     * Genera un nuevo documento electrónico con su propio correlativo.
+     */
+    public function emitirNotaCredito(Venta $venta, string $motivo): array
+    {
+        if (!$venta->tipo_comprobante || !$venta->serie_comprobante || !$venta->numero_comprobante) {
+            return ['success' => false, 'error' => 'La venta no tiene comprobante original para referenciar'];
+        }
+
+        $venta->loadMissing(['cliente', 'detalles']);
+
+        // La NC usa la misma serie que el documento original
+        $serieNC = $venta->serie_comprobante;
+        $clienteData = $this->buildClienteData($venta);
+
+        $payload = [
+            'tipo_documento' => '07',
+            'documento_referencia' => [
+                'tipo'   => $venta->tipo_comprobante,
+                'serie'  => $venta->serie_comprobante,
+                'numero' => $venta->numero_comprobante,
+            ],
+            'motivo_nota' => $motivo,
+            'cabecera' => [
+                'FECHA_EMISION'          => now()->format('Y-m-d'),
+                'CLIENTE_NRO_DOCUMENTO'  => $clienteData['numero'],
+                'CLIENTE_TIPO_IDENTIDAD' => $clienteData['tipo'],
+                'CLIENTE_NOMBRE'         => $clienteData['nombre'],
+                'CODIGO_MONEDA'          => 'PEN',
+                'TOTAL_GRAVADAS'         => number_format((float) $venta->base_imponible, 2, '.', ''),
+                'TOTAL_TRIBUTO_IGV'      => number_format((float) $venta->igv,            2, '.', ''),
+                'TOTAL_VENTA'            => number_format((float) $venta->total,           2, '.', ''),
+            ],
+            'detalles' => $this->buildDetalles($venta),
+        ];
+
+        try {
+            $response = $this->client()->post('/emitir', $payload);
+            $body = $response->json();
+
+            Log::info('Naniva NC response', ['venta_id' => $venta->id, 'status' => $response->status(), 'body' => $body]);
+
+            if ($response->successful() && ($body['success'] ?? false)) {
+                return [
+                    'success'  => true,
+                    'numero'   => $body['data']['numero']   ?? null,
+                    'filename' => $body['data']['filename']
+                        ?? ($body['data']['numero']
+                            ? "{$this->rucEmisor}-07-{$body['data']['numero']}"
+                            : null),
+                    'estado'   => $body['data']['estado']   ?? null,
+                ];
+            }
+
+            $errorMsg = $body['message'] ?? 'Error al emitir Nota de Crédito';
+            Log::error('Naniva NC fallida', ['venta_id' => $venta->id, 'response' => $body]);
+            return ['success' => false, 'error' => $errorMsg];
+        } catch (\Throwable $e) {
+            Log::error('Naniva NC excepción', ['venta_id' => $venta->id, 'msg' => $e->getMessage()]);
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    // ── Helpers privados ──────────────────────────────────────────────────────
+
+    private function client()
+    {
+        return Http::baseUrl($this->baseUrl)
+            ->withToken($this->token)
+            ->withHeaders([
+                'X-Emisor-RUC' => $this->rucEmisor,
+                'Accept'       => 'application/json',
+            ])
+            ->asJson()
+            ->timeout(15);
+    }
+
+    private function resolverTipoYSerie(Venta $venta): array
+    {
+        if ($venta->cliente && $venta->cliente->tipo_identificador === 'RUC') {
+            return ['01', $this->serieFactura];
+        }
+        return ['03', $this->serieBoleta];
+    }
+
+    private function buildClienteData(Venta $venta): array
+    {
+        if (!$venta->cliente) {
+            return ['tipo' => '0', 'numero' => '00000000', 'nombre' => 'CLIENTES VARIOS'];
+        }
+
+        $tipoMap = ['DNI' => '1', 'RUC' => '6'];
+
+        return [
+            'tipo'   => $tipoMap[$venta->cliente->tipo_identificador] ?? '1',
+            'numero' => $venta->cliente->identificador,
+            'nombre' => strtoupper(trim($venta->cliente->nombre . ' ' . ($venta->cliente->apellido ?? ''))),
+        ];
+    }
+
+    private function buildDetalles(Venta $venta): array
+    {
+        return $venta->detalles->map(function ($detalle) {
+            // precio_unitario incluye IGV 10.5% → extraemos base
+            $precioBase = round((float) $detalle->precio_unitario / 1.105, 2);
+
+            return [
+                'CODIGO'           => $detalle->codigo_producto ?? 'PRD',
+                'CANTIDAD'         => (string) $detalle->cantidad,
+                'DESCRIPCION'      => $detalle->nombre_producto,
+                'PRECIO_VALOR'     => number_format($precioBase, 2, '.', ''),
+                'TIPO_TRIBUTO_IGV' => '10',
+            ];
+        })->toArray();
+    }
+}

@@ -18,10 +18,32 @@ class Usuario extends Authenticatable
         'apellido',
         'email',
         'password',
-        'rol'
+        'role_id'
     ];
 
     protected $hidden = [
         'password',
     ];
+
+    protected $appends = ['rol', 'permisos'];
+
+    public function role()
+    {
+        return $this->belongsTo(Role::class);
+    }
+
+    public function getRolAttribute(): string
+    {
+        return $this->role?->nombre ?? 'sin_rol';
+    }
+
+    public function getPermisosAttribute(): array
+    {
+        return $this->role?->permisos ?? [];
+    }
+
+    public function tienePermiso(string $permiso): bool
+    {
+        return $this->role?->tienePermiso($permiso) ?? false;
+    }
 }

@@ -9,6 +9,23 @@ use Illuminate\Validation\Rule;
 
 class UsuarioController extends Controller
 {
+    /**
+     * Solo admin puede gestionar usuarios. Las rutas GET /perfil y PUT /perfil
+     * no pasan por aquí (están definidas directamente en api.php).
+     */
+    public function __construct()
+    {
+        $this->middleware(function ($request, $next) {
+            if (!$request->user()?->tienePermiso('usuarios')) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'No tienes permisos para gestionar usuarios',
+                ], 403);
+            }
+            return $next($request);
+        })->except(['perfil', 'actualizarPerfil']);
+    }
+
     // ─── Listar todos ───────────────────────────────────────────────
     // GET /api/usuarios
     // GET /api/usuarios?rol=cocina
@@ -18,8 +35,8 @@ class UsuarioController extends Controller
     {
         $query = Usuario::query();
 
-        if ($request->filled('rol')) {
-            $query->where('rol', $request->rol);
+        if ($request->filled('role_id')) {
+            $query->where('role_id', $request->role_id);
         }
 
         if ($request->filled('search')) {
@@ -48,15 +65,16 @@ class UsuarioController extends Controller
             'apellido' => 'nullable|string|max:255',
             'email'    => 'required|email|unique:usuarios,email',
             'password' => 'required|string|min:6',
-            'rol'      => 'nullable|in:cliente,cocina,admin',
+            'role_id'  => 'nullable|exists:roles,id',
         ]);
 
+        $rolMozo = \App\Models\Role::where('nombre', 'mozo')->value('id');
         $usuario = Usuario::create([
             'nombre'   => $request->nombre,
             'apellido' => $request->apellido ?? '',
             'email'    => $request->email,
             'password' => Hash::make($request->password),
-            'rol'      => $request->rol ?? 'cliente',
+            'role_id'  => $request->role_id ?? $rolMozo,
         ]);
 
         return response()->json([
@@ -103,10 +121,10 @@ class UsuarioController extends Controller
             'apellido' => 'nullable|string|max:255',
             'email'    => ['nullable', 'email', Rule::unique('usuarios', 'email')->ignore($id)],
             'password' => 'nullable|string|min:6',
-            'rol'      => 'nullable|in:cliente,cocina,admin',
+            'role_id'  => 'nullable|exists:roles,id',
         ]);
 
-        $datos = $request->only(['nombre', 'apellido', 'email', 'rol']);
+        $datos = $request->only(['nombre', 'apellido', 'email', 'role_id']);
 
         // Solo hashear password si se envió
         if ($request->filled('password')) {
@@ -137,15 +155,17 @@ class UsuarioController extends Controller
         }
 
         $request->validate([
-            'rol' => 'required|in:cliente,cocina,admin',
+            'role_id' => 'required|exists:roles,id',
         ]);
 
         $rolAnterior = $usuario->rol;
-        $usuario->update(['rol' => $request->rol]);
+        $usuario->update(['role_id' => $request->role_id]);
+        $usuario->load('role');
+        $nuevoRol = $usuario->rol;
 
         return response()->json([
             'status'  => true,
-            'message' => "Rol cambiado de '{$rolAnterior}' a '{$request->rol}'",
+            'message' => "Rol cambiado de '{$rolAnterior}' a '{$nuevoRol}'",
             'data'    => $usuario->fresh(),
         ]);
     }

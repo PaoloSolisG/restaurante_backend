@@ -1,0 +1,17 @@
+<?php
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Stancl\Tenancy\Middleware\InitializeTenancyByRequestData;
+
+class InitializeTenancyOptional extends InitializeTenancyByRequestData
+{
+    protected function getPayload(Request $request): ?string
+    {
+        return $request->header('X-Tenant')
+            ?? $request->get('tenant')
+            ?? env('DEFAULT_TENANT_ID');
+    }
+}

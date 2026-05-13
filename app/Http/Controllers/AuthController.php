@@ -13,22 +13,22 @@ class AuthController extends Controller
     // Registro de usuario
     public function register(Request $request)
     {
-        // Validar datos
         $request->validate([
-            'nombre' => 'required|string|max:255',
+            'nombre'   => 'required|string|max:255',
             'apellido' => 'nullable|string|max:255',
-            'email' => 'required|email|unique:usuarios,email',
+            'email'    => 'required|email|unique:usuarios,email',
             'password' => 'required|string|min:6',
-            'rol' => 'nullable|in:cliente,cocina,admin'
+            'role_id'  => 'nullable|exists:roles,id',
         ]);
 
-        // Crear usuario
+        $rolMozo = \App\Models\Role::where('nombre', 'mozo')->value('id');
+
         $user = Usuario::create([
-            'nombre' => $request->nombre,
+            'nombre'   => $request->nombre,
             'apellido' => $request->apellido,
-            'email' => $request->email,
+            'email'    => $request->email,
             'password' => bcrypt($request->password),
-            'rol' => $request->rol ?? 'cliente'
+            'role_id'  => $request->role_id ?? $rolMozo,
         ]);
 
         // Crear token
@@ -37,8 +37,8 @@ class AuthController extends Controller
         // Respuesta JSON
         return response()->json([
             'access_token' => $token,
-            'token_type' => 'Bearer',
-            'user' => $user
+            'token_type'   => 'Bearer',
+            'user'          => $user->load('role'),
         ], 201);
     }
 
@@ -46,43 +46,33 @@ class AuthController extends Controller
     // LOGIN
     public function login(Request $request)
     {
-        // Validación básica
         $request->validate([
-            'email' => 'required|email',
+            'email'    => 'required|email',
             'password' => 'required|string',
-            'codigo' => 'nullable|string' // este es opcional
+            'codigo'   => 'nullable|string',
         ]);
 
-        // Buscar usuario
         $user = Usuario::where('email', $request->email)->first();
 
-        // Verificar credenciales
         if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json([
                 'message' => 'Credenciales incorrectas'
             ], 401);
         }
 
-        // Crear token
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        // Preparar respuesta base
+        $user->load('role');
+
         $response = [
             'access_token' => $token,
-            'token_type' => 'Bearer',
-            'user' => $user
+            'token_type'   => 'Bearer',
+            'user'         => $user,
         ];
 
-        // ✅ Si envían codigo, buscar mesa
         if ($request->filled('codigo')) {
             $mesa = Mesa::where('codigo', $request->codigo)->first();
-
-            if ($mesa) {
-                $response['mesa'] = $mesa;
-            } else {
-                // opcional: devolver mensaje si el código no existe
-                $response['mesa'] = null;
-            }
+            $response['mesa'] = $mesa;
         }
 
         return response()->json($response);
@@ -115,9 +105,10 @@ class AuthController extends Controller
     // GET /api/me
     public function me(Request $request)
     {
+        $user = $request->user()->load('role');
         return response()->json([
             'status' => true,
-            'user'   => $request->user(),
+            'user'   => $user,
         ]);
     }
 }

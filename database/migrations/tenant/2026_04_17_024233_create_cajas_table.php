@@ -37,8 +37,8 @@ return new class extends Migration
 
             $table->timestamps();
 
-            $table->foreign('usuario_apertura_id')->references('id')->on('users');
-            $table->foreign('usuario_cierre_id')->references('id')->on('users');
+            $table->foreign('usuario_apertura_id')->references('id')->on('usuarios');
+            $table->foreign('usuario_cierre_id')->references('id')->on('usuarios')->onDelete('set null');
         });
     }
 

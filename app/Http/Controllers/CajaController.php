@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AuditLog;
 use App\Models\Caja;
 use App\Models\CajaMovimiento;
 use App\Models\Venta;
@@ -12,13 +13,30 @@ use Illuminate\Support\Facades\DB;
 
 class CajaController extends Controller
 {
-    /** GET /caja/estado — ¿hay caja abierta ahora? */
+    /** GET /caja/estado — ¿hay caja abierta ahora? Calcula totales en tiempo real */
     public function estado()
     {
         $caja = Caja::with('usuarioApertura')
             ->where('estado', 'abierta')
             ->latest()
             ->first();
+
+        if ($caja) {
+            $ventas = Venta::where('caja_id', $caja->id)
+                ->where('activo', true)
+                ->select('metodo_pago', 'total', 'pagos_detalle')
+                ->get();
+
+            $totales = $this->calcularTotalesPorMetodo($ventas);
+
+            $caja->total_efectivo = $totales['efectivo'];
+            $caja->total_tarjeta  = $totales['tarjeta'];
+            $caja->total_yape     = $totales['yape'];
+            $caja->total_plin     = $totales['plin'];
+            $caja->total_deposito = $totales['deposito'];
+            $caja->total_mixto    = $totales['mixto'];
+            $caja->total_ventas   = $ventas->sum('total');
+        }
 
         return response()->json([
             'status'       => true,
@@ -65,6 +83,12 @@ class CajaController extends Controller
             ]);
         }
 
+        AuditLog::registrar(
+            'caja.abrir', 'Caja', $caja->id,
+            "Caja #{$caja->id} abierta — Monto inicial: S/ {$caja->monto_inicial}",
+            ['monto_inicial' => $caja->monto_inicial]
+        );
+
         return response()->json([
             'status'  => true,
             'message' => 'Caja abierta correctamente',
@@ -91,19 +115,28 @@ class CajaController extends Controller
 
         return DB::transaction(function () use ($request, $caja) {
             // Calcular totales por método de pago de las ventas de esta caja
-            $ventas = Venta::where('caja_id', $caja->id)->get();
+            $ventas = Venta::where('caja_id', $caja->id)
+                ->where('activo', true)
+                ->select('metodo_pago', 'total', 'pagos_detalle')
+                ->get();
 
-            $totalEfectivo = $ventas->where('metodo_pago', 'efectivo')->sum('total');
-            $totalTarjeta  = $ventas->where('metodo_pago', 'tarjeta')->sum('total');
-            $totalYape     = $ventas->where('metodo_pago', 'yape')->sum('total');
-            $totalPlin     = $ventas->where('metodo_pago', 'plin')->sum('total');
-            $totalDeposito = $ventas->where('metodo_pago', 'deposito')->sum('total');
-            $totalMixto    = $ventas->where('metodo_pago', 'mixto')->sum('total');
+            $totales = $this->calcularTotalesPorMetodo($ventas);
+
+            $totalEfectivo = $totales['efectivo'];
+            $totalTarjeta  = $totales['tarjeta'];
+            $totalYape     = $totales['yape'];
+            $totalPlin     = $totales['plin'];
+            $totalDeposito = $totales['deposito'];
+            $totalMixto    = $totales['mixto'];
             $totalVentas   = $ventas->sum('total');
 
-            // Calcular egresos manuales
+            // Solo egresos manuales (retiro, gasto, ajuste).
+            // Las anulaciones NO se restan aquí porque la venta ya queda
+            // excluida del total al pasar a activo=false — restarla también
+            // produciría un doble descuento.
             $egresos = CajaMovimiento::where('caja_id', $caja->id)
                 ->where('tipo', 'egreso')
+                ->where('concepto', '!=', 'anulacion')
                 ->sum('monto');
 
             // Ingresos extras manuales (sin contar apertura ni ventas)
@@ -113,7 +146,10 @@ class CajaController extends Controller
                 ->where('descripcion', '!=', 'Monto inicial de apertura')
                 ->sum('monto');
 
-            $montoEsperado = $caja->monto_inicial + $totalEfectivo + $ingresosExtra - $egresos;
+            // total_mixto = ventas con metodo_pago='mixto' pero sin pagos_detalle.
+            // Se incluye en el esperado de efectivo porque sin desglose no se puede saber
+            // qué método usó realmente el cliente, y es más seguro asumirlo como cash.
+            $montoEsperado = $caja->monto_inicial + $totalEfectivo + $totalMixto + $ingresosExtra - $egresos;
             $diferencia    = $request->monto_real - $montoEsperado;
 
             $caja->update([
@@ -132,6 +168,12 @@ class CajaController extends Controller
                 'cierre_at'         => now(),
                 'notas_cierre'      => $request->notas_cierre,
             ]);
+
+            AuditLog::registrar(
+                'caja.cerrar', 'Caja', $caja->id,
+                "Caja #{$caja->id} cerrada — Total ventas: S/ {$totalVentas} — Esperado: S/ {$montoEsperado} — Real: S/ {$request->monto_real} — Diferencia: S/ {$diferencia}",
+                ['total_ventas' => $totalVentas, 'monto_esperado' => $montoEsperado, 'monto_real' => $request->monto_real, 'diferencia' => $diferencia]
+            );
 
             return response()->json([
                 'status'  => true,
@@ -168,6 +210,12 @@ class CajaController extends Controller
             'metodo_pago' => $request->metodo_pago,
         ]);
 
+        AuditLog::registrar(
+            'caja.movimiento', 'Caja', $caja->id,
+            "Movimiento {$request->tipo} — {$request->descripcion} — S/ {$request->monto} ({$request->metodo_pago})",
+            ['tipo' => $request->tipo, 'concepto' => $request->concepto, 'monto' => $request->monto, 'metodo_pago' => $request->metodo_pago]
+        );
+
         return response()->json([
             'status'  => true,
             'message' => 'Movimiento registrado',
@@ -193,6 +241,31 @@ class CajaController extends Controller
             'status' => true,
             'data'   => $query->orderByDesc('apertura_at')->get()
         ]);
+    }
+
+    /**
+     * Distribuye los totales por método de pago.
+     * Las ventas mixtas se desglosan según pagos_detalle en lugar de acumularse en total_mixto.
+     */
+    private function calcularTotalesPorMetodo($ventas): array
+    {
+        $totales = ['efectivo' => 0, 'tarjeta' => 0, 'yape' => 0, 'plin' => 0, 'deposito' => 0, 'mixto' => 0];
+
+        foreach ($ventas as $venta) {
+            if ($venta->metodo_pago === 'mixto' && !empty($venta->pagos_detalle)) {
+                // Distribuir según el desglose guardado
+                foreach ($venta->pagos_detalle as $p) {
+                    $metodo = $p['metodo'] ?? '';
+                    if (isset($totales[$metodo])) {
+                        $totales[$metodo] += floatval($p['monto'] ?? 0);
+                    }
+                }
+            } elseif (isset($totales[$venta->metodo_pago])) {
+                $totales[$venta->metodo_pago] += floatval($venta->total);
+            }
+        }
+
+        return $totales;
     }
 
     /** GET /caja/:id — detalle de una caja con movimientos */

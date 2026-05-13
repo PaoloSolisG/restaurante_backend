@@ -25,10 +25,28 @@ class Venta extends Model
         'vuelto',
         'pagos_detalle',
         'notas',
-        'activo'
+        'activo',
+        // Facturación electrónica
+        'tipo_comprobante',
+        'serie_comprobante',
+        'numero_comprobante',
+        'filename_comprobante',
+        'estado_sunat',
+        'error_comprobante',
+        // Anulación
+        'motivo_anulacion',
+        'anulado_en',
+        'tipo_anulacion',
+        'filename_anulacion',
+        // Baja SUNAT (RA/RC)
+        'ticket_baja',
+        'fecha_baja',
+        'correlativo_baja',
+        'estado_baja',
     ];
+
     protected $casts = [
-        'pagos_detalle' => 'array'
+        'pagos_detalle' => 'array',
     ];
 
     public function orden()

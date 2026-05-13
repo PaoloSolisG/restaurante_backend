@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AuditLog;
 use App\Models\Caja;
 use App\Models\CajaMovimiento;
 use App\Models\Orden;
 use App\Models\Venta;
 use App\Models\VentaDetalle;
+use App\Services\FacturacionService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -34,18 +36,22 @@ class VentaController extends Controller
 
         $ventas = $query->orderByDesc('created_at')->get();
 
+        // Totales solo de ventas activas
+        $ventasActivas = $ventas->where('activo', true);
+
         return response()->json([
             'status' => true,
             'data'   => $ventas,
+            'anuladas' => $ventas->where('activo', false)->count(),
             'resumen' => [
-                'total_ventas'    => $ventas->count(),
-                'total_periodo'   => $ventas->sum('total'),
-                'total_efectivo'  => $ventas->where('metodo_pago', 'efectivo')->sum('total'),
-                'total_tarjeta'   => $ventas->where('metodo_pago', 'tarjeta')->sum('total'),
-                'total_yape'      => $ventas->where('metodo_pago', 'yape')->sum('total'),
-                'total_plin'      => $ventas->where('metodo_pago', 'plin')->sum('total'),
-                'total_deposito'  => $ventas->where('metodo_pago', 'deposito')->sum('total'),
-                'total_mixto'     => $ventas->where('metodo_pago', 'mixto')->sum('total'),
+                'total_ventas'    => $ventasActivas->count(),
+                'total_periodo'   => $ventasActivas->sum('total'),
+                'total_efectivo'  => $ventasActivas->where('metodo_pago', 'efectivo')->sum('total'),
+                'total_tarjeta'   => $ventasActivas->where('metodo_pago', 'tarjeta')->sum('total'),
+                'total_yape'      => $ventasActivas->where('metodo_pago', 'yape')->sum('total'),
+                'total_plin'      => $ventasActivas->where('metodo_pago', 'plin')->sum('total'),
+                'total_deposito'  => $ventasActivas->where('metodo_pago', 'deposito')->sum('total'),
+                'total_mixto'     => $ventasActivas->where('metodo_pago', 'mixto')->sum('total'),
             ]
         ]);
     }
@@ -62,25 +68,28 @@ class VentaController extends Controller
 
     /**
      * POST /ventas
-     * Convierte una orden cerrada en venta y registra movimiento en caja
+     * Convierte una orden cerrada en venta, registra en caja y emite comprobante electrónico.
+     *
+     * Campos opcionales del request:
+     *   - emitir_comprobante (bool, default: true) — si false, omite la emisión a Naniva
      */
     public function store(Request $request)
     {
         $request->validate([
-            'orden_id'       => 'required|exists:ordenes,id',
-            'metodo_pago'    => 'required|in:efectivo,tarjeta,yape,plin,deposito,mixto',
-            'monto_recibido' => 'required|numeric|min:0',
-            'propina'        => 'nullable|numeric|min:0',
-            'descuento'      => 'nullable|numeric|min:0',
-            'pagos_detalle'  => 'nullable|array',
+            'orden_id'           => 'required|exists:ordenes,id',
+            'metodo_pago'        => 'required|in:efectivo,tarjeta,yape,plin,deposito,mixto',
+            'monto_recibido'     => 'required|numeric|min:0',
+            'propina'            => 'nullable|numeric|min:0',
+            'descuento'          => 'nullable|numeric|min:0',
+            'pagos_detalle'      => 'nullable|array',
+            'emitir_comprobante' => 'nullable|boolean',
         ]);
 
-        // ── Verificar caja abierta ────────────────────────────
         $caja = Caja::where('estado', 'abierta')->latest()->first();
         if (!$caja) {
             return response()->json([
                 'status'  => false,
-                'message' => 'No hay caja abierta. Abre la caja antes de registrar ventas.'
+                'message' => 'No hay caja abierta. Abre la caja antes de registrar ventas.',
             ], 400);
         }
 
@@ -89,18 +98,19 @@ class VentaController extends Controller
         if ($orden->estado !== 'cerrado') {
             return response()->json([
                 'status'  => false,
-                'message' => 'La orden debe estar cerrada para registrar una venta'
+                'message' => 'La orden debe estar cerrada para registrar una venta',
             ], 400);
         }
 
         if (Venta::where('orden_id', $orden->id)->exists()) {
             return response()->json([
                 'status'  => false,
-                'message' => 'Esta orden ya tiene una venta registrada'
+                'message' => 'Esta orden ya tiene una venta registrada',
             ], 400);
         }
 
-        return DB::transaction(function () use ($request, $orden, $caja) {
+        // ── 1. Persistir venta en base de datos (dentro de transacción) ──────
+        $venta = DB::transaction(function () use ($request, $orden, $caja) {
             $IGV_DIV       = 1.105;
             $propina       = $request->propina ?? 0;
             $descuento     = $request->descuento ?? 0;
@@ -109,7 +119,6 @@ class VentaController extends Controller
             $total         = round($orden->total + $propina - $descuento, 2);
             $vuelto        = max(0, round($request->monto_recibido - $total, 2));
 
-            // 1. Crear la venta vinculada a la caja
             $venta = Venta::create([
                 'orden_id'       => $orden->id,
                 'caja_id'        => $caja->id,
@@ -129,7 +138,6 @@ class VentaController extends Controller
                 'notas'          => $orden->notas,
             ]);
 
-            // 2. Snapshot de productos
             foreach ($orden->detalles as $detalle) {
                 VentaDetalle::create([
                     'venta_id'        => $venta->id,
@@ -142,23 +150,259 @@ class VentaController extends Controller
                 ]);
             }
 
-            // 3. Registrar movimiento en caja
-            CajaMovimiento::create([
-                'caja_id'     => $caja->id,
-                'usuario_id'  => Auth::id(),
-                'venta_id'    => $venta->id,
-                'tipo'        => 'ingreso',
-                'concepto'    => 'venta',
-                'descripcion' => "Venta #{$venta->id} - Orden #{$orden->id}",
-                'monto'       => $total,
-                'metodo_pago' => $request->metodo_pago,
+            // Registrar ingreso(s) en caja — un movimiento por método de pago
+            $desc = "Venta #{$venta->id} - Orden #{$orden->id}";
+            if ($request->metodo_pago === 'mixto' && !empty($request->pagos_detalle)) {
+                foreach ($request->pagos_detalle as $pago) {
+                    CajaMovimiento::create([
+                        'caja_id'     => $caja->id,
+                        'usuario_id'  => Auth::id(),
+                        'venta_id'    => $venta->id,
+                        'tipo'        => 'ingreso',
+                        'concepto'    => 'venta',
+                        'descripcion' => $desc,
+                        'monto'       => $pago['monto'],
+                        'metodo_pago' => $pago['metodo'],
+                    ]);
+                }
+            } else {
+                CajaMovimiento::create([
+                    'caja_id'     => $caja->id,
+                    'usuario_id'  => Auth::id(),
+                    'venta_id'    => $venta->id,
+                    'tipo'        => 'ingreso',
+                    'concepto'    => 'venta',
+                    'descripcion' => $desc,
+                    'monto'       => $total,
+                    'metodo_pago' => $request->metodo_pago,
+                ]);
+            }
+
+            return $venta;
+        });
+
+        // ── 2. Emitir comprobante electrónico (fuera de transacción) ─────────
+        // Si Naniva falla, la venta queda guardada y puede reintentarse desde
+        // POST /ventas/{id}/comprobante/emitir
+        $comprobanteInfo = null;
+        $emitir = $request->boolean('emitir_comprobante', true);
+
+        if ($emitir) {
+            $facturacion = app(FacturacionService::class);
+            $result      = $facturacion->emitir($venta->load('cliente', 'detalles'));
+
+            $venta->update([
+                'tipo_comprobante'    => $result['tipo_comprobante']   ?? null,
+                'serie_comprobante'   => $result['serie_comprobante']  ?? null,
+                'numero_comprobante'  => $result['numero_comprobante'] ?? null,
+                'filename_comprobante'=> $result['filename']           ?? null,
+                'estado_sunat'        => $result['estado_sunat']       ?? null,
+                'error_comprobante'   => $result['error']              ?? null,
             ]);
 
-            return response()->json([
-                'status'  => true,
-                'message' => "Venta #{$venta->id} registrada correctamente",
-                'data'    => $venta->load('mesa', 'cliente', 'mozo', 'detalles'),
-            ], 201);
+            $comprobanteInfo = [
+                'emitido'            => $result['success'],
+                'numero_comprobante' => $venta->numero_comprobante,
+                'estado_sunat'       => $venta->estado_sunat,
+                'error'              => $result['success'] ? null : $result['error'],
+            ];
+        }
+
+        AuditLog::registrar(
+            'venta.crear', 'Venta', $venta->id,
+            "Venta #{$venta->id} registrada — Mesa {$venta->mesa_id} — S/ {$venta->total} — {$venta->metodo_pago}",
+            ['total' => $venta->total, 'metodo_pago' => $venta->metodo_pago, 'orden_id' => $venta->orden_id]
+        );
+
+        return response()->json([
+            'status'      => true,
+            'message'     => "Venta #{$venta->id} registrada correctamente",
+            'data'        => $venta->load('mesa', 'cliente', 'mozo', 'detalles'),
+            'comprobante' => $comprobanteInfo,
+        ], 201);
+    }
+
+    /**
+     * POST /ventas/{id}/anular — Comunicación de Baja (RA) directa.
+     * Anula el comprobante ante SUNAT sin generar nuevo documento.
+     * Si la venta no tiene comprobante electrónico, solo revierte la caja.
+     */
+    public function anular(Request $request, $id)
+    {
+        $request->validate([
+            'motivo' => 'required|string|min:5|max:500',
+        ]);
+
+        $venta = Venta::find($id);
+        if (!$venta) {
+            return response()->json(['status' => false, 'message' => 'Venta no encontrada'], 404);
+        }
+
+        if (!$venta->activo) {
+            return response()->json(['status' => false, 'message' => 'Esta venta ya fue anulada'], 400);
+        }
+
+        $filenameAnulacion = null;
+        $errorBaja = null;
+
+        // Si tiene comprobante, intentar baja ante SUNAT
+        if ($venta->numero_comprobante) {
+            $facturacion = app(FacturacionService::class);
+            $result = $facturacion->darBaja($venta, $request->motivo);
+
+            if (!$result['success']) {
+                $errorBaja = $result['error'] ?? 'Error al dar de baja el comprobante';
+            } else {
+                $filenameAnulacion = $result['filename'] ?? null;
+            }
+        }
+
+        DB::transaction(function () use ($venta, $request, $filenameAnulacion) {
+            // Registrar egreso(s) de reversa — un movimiento por método de pago
+            // (solo como auditoría; NO se resta del monto_esperado porque la venta
+            //  ya queda excluida al pasar a activo=false)
+            $descAnul = "Anulación Venta #{$venta->id} — {$request->motivo}";
+            if ($venta->metodo_pago === 'mixto' && !empty($venta->pagos_detalle)) {
+                foreach ($venta->pagos_detalle as $pago) {
+                    CajaMovimiento::create([
+                        'caja_id'     => $venta->caja_id,
+                        'usuario_id'  => Auth::id(),
+                        'venta_id'    => $venta->id,
+                        'tipo'        => 'egreso',
+                        'concepto'    => 'anulacion',
+                        'descripcion' => $descAnul,
+                        'monto'       => $pago['monto'],
+                        'metodo_pago' => $pago['metodo'],
+                    ]);
+                }
+            } else {
+                CajaMovimiento::create([
+                    'caja_id'     => $venta->caja_id,
+                    'usuario_id'  => Auth::id(),
+                    'venta_id'    => $venta->id,
+                    'tipo'        => 'egreso',
+                    'concepto'    => 'anulacion',
+                    'descripcion' => $descAnul,
+                    'monto'       => $venta->total,
+                    'metodo_pago' => $venta->metodo_pago,
+                ]);
+            }
+
+            $venta->update([
+                'activo'             => false,
+                'motivo_anulacion'   => $request->motivo,
+                'anulado_en'         => now(),
+                'tipo_anulacion'     => 'RA',
+                'filename_anulacion' => $filenameAnulacion,
+            ]);
         });
+
+        AuditLog::registrar(
+            'venta.anular', 'Venta', $venta->id,
+            "Venta #{$venta->id} anulada — Motivo: {$request->motivo}",
+            ['total' => $venta->total, 'metodo_pago' => $venta->metodo_pago, 'motivo' => $request->motivo, 'error_sunat' => $errorBaja]
+        );
+
+        return response()->json([
+            'status'  => true,
+            'message' => $errorBaja
+                ? "Venta anulada localmente, pero la baja ante SUNAT falló: {$errorBaja}"
+                : 'Venta anulada correctamente (Comunicación de Baja)',
+            'data'    => $venta->fresh(),
+            'warning' => $errorBaja,
+        ]);
+    }
+
+    /**
+     * POST /ventas/{id}/nota-credito — Emite Nota de Crédito (07).
+     * Genera un nuevo comprobante que anula legalmente al original.
+     */
+    public function notaCredito(Request $request, $id)
+    {
+        $request->validate([
+            'motivo' => 'required|string|min:5|max:500',
+        ]);
+
+        $venta = Venta::with(['cliente', 'detalles'])->find($id);
+        if (!$venta) {
+            return response()->json(['status' => false, 'message' => 'Venta no encontrada'], 404);
+        }
+
+        if (!$venta->activo) {
+            return response()->json(['status' => false, 'message' => 'Esta venta ya fue anulada'], 400);
+        }
+
+        if (!$venta->numero_comprobante) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'Esta venta no tiene comprobante original. Use /anular en su lugar.',
+            ], 400);
+        }
+
+        $facturacion = app(FacturacionService::class);
+        $result = $facturacion->emitirNotaCredito($venta, $request->motivo);
+
+        if (!$result['success']) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'Error al emitir Nota de Crédito: ' . ($result['error'] ?? 'Desconocido'),
+            ], 502);
+        }
+
+        DB::transaction(function () use ($venta, $request, $result) {
+            $descNC = "Nota de Crédito Venta #{$venta->id} — {$request->motivo}";
+            if ($venta->metodo_pago === 'mixto' && !empty($venta->pagos_detalle)) {
+                foreach ($venta->pagos_detalle as $pago) {
+                    CajaMovimiento::create([
+                        'caja_id'     => $venta->caja_id,
+                        'usuario_id'  => Auth::id(),
+                        'venta_id'    => $venta->id,
+                        'tipo'        => 'egreso',
+                        'concepto'    => 'anulacion',
+                        'descripcion' => $descNC,
+                        'monto'       => $pago['monto'],
+                        'metodo_pago' => $pago['metodo'],
+                    ]);
+                }
+            } else {
+                CajaMovimiento::create([
+                    'caja_id'     => $venta->caja_id,
+                    'usuario_id'  => Auth::id(),
+                    'venta_id'    => $venta->id,
+                    'tipo'        => 'egreso',
+                    'concepto'    => 'anulacion',
+                    'descripcion' => $descNC,
+                    'monto'       => $venta->total,
+                    'metodo_pago' => $venta->metodo_pago,
+                ]);
+            }
+
+            $venta->update([
+                'activo'             => false,
+                'motivo_anulacion'   => $request->motivo,
+                'anulado_en'         => now(),
+                'tipo_anulacion'     => 'NC',
+                'filename_anulacion' => $result['filename'] ?? null,
+            ]);
+        });
+
+        AuditLog::registrar(
+            'venta.nota_credito', 'Venta', $venta->id,
+            "Nota de Crédito emitida para Venta #{$venta->id} — Motivo: {$request->motivo}",
+            ['total' => $venta->total, 'numero_nc' => $result['numero'] ?? null, 'motivo' => $request->motivo]
+        );
+
+        return response()->json([
+            'status'  => true,
+            'message' => 'Nota de Crédito emitida correctamente. Venta anulada.',
+            'data'    => [
+                'venta'      => $venta->fresh(),
+                'nota_credito' => [
+                    'numero'   => $result['numero'] ?? null,
+                    'filename' => $result['filename'] ?? null,
+                    'estado'   => $result['estado'] ?? null,
+                ],
+            ],
+        ]);
     }
 }
