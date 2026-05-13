@@ -40,7 +40,11 @@ class FacturacionService
 
             $data = json_decode($raw ?? '{}', true);
             return $data['facturacion'] ?? [];
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            Log::error('tenantFacturacionConfig falló', [
+                'error' => $e->getMessage(),
+                'tenant' => tenant()?->getTenantKey(),
+            ]);
             return [];
         }
     }
