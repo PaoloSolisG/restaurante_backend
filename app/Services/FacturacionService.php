@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Venta;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -16,16 +17,33 @@ class FacturacionService
 
     public function __construct()
     {
-        // Lee config del tenant actual; cae al .env como fallback
-        $cfg = (function_exists('tenant') && tenant())
-            ? (tenant()->data['facturacion'] ?? [])
-            : [];
+        $cfg = $this->tenantFacturacionConfig();
 
-        $this->baseUrl      = rtrim($cfg['api_url']       ?? config('facturacion.base_url'),    '/');
+        $this->baseUrl      = rtrim($cfg['api_url']       ?? config('facturacion.base_url'), '/');
         $this->token        = $cfg['token']               ?? config('facturacion.token');
         $this->rucEmisor    = $cfg['ruc_emisor']          ?? config('facturacion.ruc_emisor');
         $this->serieBoleta  = $cfg['serie_boleta']        ?? config('facturacion.serie_boleta');
         $this->serieFactura = $cfg['serie_factura']       ?? config('facturacion.serie_factura');
+    }
+
+    private function tenantFacturacionConfig(): array
+    {
+        if (!function_exists('tenant') || !tenant()) {
+            return [];
+        }
+
+        try {
+            $centralConn = config('tenancy.database.central_connection', 'mysql');
+            $raw = DB::connection($centralConn)
+                ->table('tenants')
+                ->where('id', tenant()->getTenantKey())
+                ->value('data');
+
+            $data = json_decode($raw ?? '{}', true);
+            return $data['facturacion'] ?? [];
+        } catch (\Throwable) {
+            return [];
+        }
     }
 
     /** Verifica conexión con la API de Naniva */
