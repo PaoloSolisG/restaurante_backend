@@ -50,9 +50,8 @@ class ProductoController extends Controller
             'activo'       => 'boolean'
         ]);
 
-        // Manejo de imagen si se sube
         if ($request->hasFile('imagen')) {
-            $data['imagen'] = $request->file('imagen')->store('productos', 'public');
+            $data['imagen'] = $request->file('imagen')->store('productos/' . tenant('id'), 'public');
         }
 
         $producto = Producto::create($data);
@@ -91,12 +90,11 @@ class ProductoController extends Controller
             'activo'       => 'boolean'
         ]);
 
-        // Si hay nueva imagen, eliminar la anterior y subir la nueva
         if ($request->hasFile('imagen')) {
             if ($producto->imagen) {
                 Storage::disk('public')->delete($producto->imagen);
             }
-            $data['imagen'] = $request->file('imagen')->store('productos', 'public');
+            $data['imagen'] = $request->file('imagen')->store('productos/' . tenant('id'), 'public');
         }
 
         $producto->update($data);
