@@ -9,7 +9,7 @@ class ConfiguracionController extends Controller
 {
     private function centralConn(): string
     {
-        return 'central';
+        return config('tenancy.database.central_connection', 'mysql');
     }
 
     public function show()
