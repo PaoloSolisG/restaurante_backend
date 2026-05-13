@@ -164,7 +164,7 @@ class FacturacionService
     public function getXml(string $filename): array
     {
         try {
-            $response = $this->downloadClient()->get("/comprobantes/{$filename}/xml", ['format' => 'raw']);
+            $response = $this->downloadClient()->get("/comprobantes/{$filename}/xml");
             Log::error('getXml debug', [
                 'filename' => $filename,
                 'status'   => $response->status(),
@@ -190,7 +190,7 @@ class FacturacionService
     public function getCdr(string $filename): array
     {
         try {
-            $response = $this->downloadClient()->get("/comprobantes/{$filename}/cdr", ['format' => 'raw']);
+            $response = $this->downloadClient()->get("/comprobantes/{$filename}/cdr");
             Log::error('getCdr debug', [
                 'filename' => $filename,
                 'status'   => $response->status(),
