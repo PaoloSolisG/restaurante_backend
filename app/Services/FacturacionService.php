@@ -29,7 +29,14 @@ class FacturacionService
     private function tenantFacturacionConfig(): array
     {
         try {
+            $db  = config('database.connections.mysql.database', 'N/A');
             $row = DB::table('facturacion_config')->first();
+            Log::error('[FacturacionService] tenantFacturacionConfig', [
+                'mysql_db'  => $db,
+                'row_found' => (bool) $row,
+                'token_set' => $row ? !empty($row->token) : false,
+                'ruc'       => $row->ruc_emisor ?? 'none',
+            ]);
             if (!$row || empty($row->token)) {
                 return [];
             }
@@ -43,6 +50,7 @@ class FacturacionService
                 'serie_factura' => $row->serie_factura,
             ];
         } catch (\Throwable $e) {
+            Log::error('[FacturacionService] tenantFacturacionConfig ERROR', ['error' => $e->getMessage()]);
             return [];
         }
     }
