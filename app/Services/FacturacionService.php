@@ -29,40 +29,20 @@ class FacturacionService
     private function tenantFacturacionConfig(): array
     {
         try {
-            // 1. Intentar tenant() (funciona cuando el bootstrapper inicializa correctamente)
-            $t = \tenant();
-            $tenantId = $t ? $t->getTenantKey() : null;
-
-            // 2. Fallback: leer X-Tenant header (siempre presente en todos los requests)
-            if (!$tenantId) {
-                $request  = \app('request');
-                $tenantId = $request->header('X-Tenant')
-                    ?? $request->get('tenant');
-            }
-
-            // 3. Fallback: derivar del nombre de la DB (cuando DatabaseTenancyBootstrapper corre)
-            if (!$tenantId) {
-                $db     = \config('database.connections.mysql.database', '');
-                $prefix = \config('tenancy.database.prefix', 'restaurante_');
-                if (str_starts_with($db, $prefix)) {
-                    $tenantId = substr($db, strlen($prefix));
-                }
-            }
-
-            if (!$tenantId) {
+            $row = DB::table('facturacion_config')->first();
+            if (!$row || empty($row->token)) {
                 return [];
             }
-
-            $raw  = DB::connection('central')
-                ->table('tenants')
-                ->where('id', $tenantId)
-                ->value('data');
-
-            $data = json_decode($raw ?? '{}', true);
-            return $data['facturacion'] ?? [];
-
+            return [
+                'api_url'       => $row->api_url,
+                'token'         => $row->token,
+                'ruc_emisor'    => $row->ruc_emisor,
+                'razon_social'  => $row->razon_social,
+                'direccion'     => $row->direccion,
+                'serie_boleta'  => $row->serie_boleta,
+                'serie_factura' => $row->serie_factura,
+            ];
         } catch (\Throwable $e) {
-            Log::error('tenantFacturacionConfig falló', ['error' => $e->getMessage()]);
             return [];
         }
     }
