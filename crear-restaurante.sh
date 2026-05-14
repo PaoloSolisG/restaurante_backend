@@ -92,29 +92,11 @@ if [ -z "$NPM_TOKEN" ]; then
 fi
 echo "  ✓ Conectado a NPM"
 
-# Buscar certificado wildcard *.naniva.cloud
-CERT_ID=$(curl -s "$NPM_URL/api/nginx/certificates?expand=owner" \
-    -H "Authorization: Bearer $NPM_TOKEN" | \
-    python3 -c "
-import sys,json
-certs = json.load(sys.stdin)
-for c in certs:
-    for d in c.get('domain_names', []):
-        if 'naniva.cloud' in d:
-            print(c['id'])
-            sys.exit()
-print(0)
-" 2>/dev/null || echo "0")
-
-[ "$CERT_ID" != "0" ] && echo "  ✓ Certificado SSL wildcard encontrado (ID: $CERT_ID)" || echo "  ~ Sin certificado wildcard, se creará sin SSL forzado"
-
 # ── Paso 4: Crear proxy host ────────────────────────────────────
 echo ""
 echo "→ [4/4] Creando proxy host en NPM..."
 
-SSL_FORCED=true
-[ "$CERT_ID" = "0" ] && SSL_FORCED=false
-
+# Primero crear el proxy sin SSL
 NPM_HOST=$(curl -s -X POST "$NPM_URL/api/nginx/proxy-hosts" \
     -H "Authorization: Bearer $NPM_TOKEN" \
     -H "Content-Type: application/json" \
@@ -123,18 +105,55 @@ NPM_HOST=$(curl -s -X POST "$NPM_URL/api/nginx/proxy-hosts" \
         \"forward_scheme\": \"http\",
         \"forward_host\": \"$FRONTEND_HOST\",
         \"forward_port\": $FRONTEND_PORT,
-        \"ssl_forced\": $SSL_FORCED,
+        \"ssl_forced\": false,
         \"http2_support\": true,
         \"block_exploits\": true,
         \"allow_websocket_upgrade\": true,
         \"enabled\": true,
-        \"certificate_id\": $CERT_ID
+        \"certificate_id\": 0
     }")
 
 NPM_ID=$(echo "$NPM_HOST" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id','?'))" 2>/dev/null || echo "?")
 
 if [ "$NPM_ID" != "?" ] && [ -n "$NPM_ID" ]; then
     echo "  ✓ Proxy host creado (NPM ID: $NPM_ID)"
+
+    # Solicitar certificado Let's Encrypt para el nuevo dominio
+    echo "  ~ Solicitando certificado SSL Let's Encrypt..."
+    CERT_RESPONSE=$(curl -s -X POST "$NPM_URL/api/nginx/certificates" \
+        -H "Authorization: Bearer $NPM_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"provider\": \"letsencrypt\",
+            \"domain_names\": [\"$DOMINIO\"],
+            \"meta\": {\"letsencrypt_agree\": true, \"letsencrypt_email\": \"$NPM_EMAIL\"}
+        }")
+
+    NEW_CERT_ID=$(echo "$CERT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',0))" 2>/dev/null || echo "0")
+
+    if [ "$NEW_CERT_ID" != "0" ] && [ -n "$NEW_CERT_ID" ]; then
+        echo "  ✓ Certificado SSL generado (ID: $NEW_CERT_ID)"
+
+        # Actualizar proxy host con el certificado y forzar SSL
+        curl -s -X PUT "$NPM_URL/api/nginx/proxy-hosts/$NPM_ID" \
+            -H "Authorization: Bearer $NPM_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"domain_names\": [\"$DOMINIO\"],
+                \"forward_scheme\": \"http\",
+                \"forward_host\": \"$FRONTEND_HOST\",
+                \"forward_port\": $FRONTEND_PORT,
+                \"ssl_forced\": true,
+                \"http2_support\": true,
+                \"block_exploits\": true,
+                \"allow_websocket_upgrade\": true,
+                \"enabled\": true,
+                \"certificate_id\": $NEW_CERT_ID
+            }" > /dev/null
+        echo "  ✓ SSL activado y forzado"
+    else
+        echo "  ~ SSL pendiente — actívalo manualmente en NPM editando el proxy host"
+    fi
 else
     ERROR=$(echo "$NPM_HOST" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',{}).get('message','?'))" 2>/dev/null || echo "?")
     echo "  ✗ Error en NPM: $ERROR"
