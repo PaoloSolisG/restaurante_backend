@@ -29,20 +29,33 @@ class FacturacionService
     private function tenantFacturacionConfig(): array
     {
         try {
-            // Derive tenant key from the current mysql DB name
-            // (DatabaseTenancyBootstrapper sets it to 'restaurante_{tenantId}')
-            $db     = config('database.connections.mysql.database', '');
-            $prefix = config('tenancy.database.prefix', 'restaurante_');
+            // 1. Intentar tenant() (funciona cuando el bootstrapper inicializa correctamente)
+            $t = \tenant();
+            $tenantId = $t ? $t->getTenantKey() : null;
 
-            if (!str_starts_with($db, $prefix)) {
+            // 2. Fallback: leer X-Tenant header (siempre presente en todos los requests)
+            if (!$tenantId) {
+                $request  = \app('request');
+                $tenantId = $request->header('X-Tenant')
+                    ?? $request->get('tenant');
+            }
+
+            // 3. Fallback: derivar del nombre de la DB (cuando DatabaseTenancyBootstrapper corre)
+            if (!$tenantId) {
+                $db     = \config('database.connections.mysql.database', '');
+                $prefix = \config('tenancy.database.prefix', 'restaurante_');
+                if (str_starts_with($db, $prefix)) {
+                    $tenantId = substr($db, strlen($prefix));
+                }
+            }
+
+            if (!$tenantId) {
                 return [];
             }
 
-            $tenantKey = substr($db, strlen($prefix));
-
             $raw  = DB::connection('central')
                 ->table('tenants')
-                ->where('id', $tenantKey)
+                ->where('id', $tenantId)
                 ->value('data');
 
             $data = json_decode($raw ?? '{}', true);
@@ -126,19 +139,15 @@ class FacturacionService
     public function getPdf(string $filename): array
     {
         try {
-            $response = $this->client()->get("/comprobantes/{$filename}/pdf", [
-                'mode'       => 'base64',
-                'ruc_emisor' => $this->rucEmisor,
+            $response = $this->downloadClient()->get("/comprobantes/{$filename}/pdf", [
+                'mode' => 'base64',
             ]);
 
             if ($response->successful()) {
-                // Intentar JSON primero (por si Naniva cambia el formato)
                 $body = $response->json();
                 if ($body && !empty($body['data']['pdf_base64'])) {
                     return ['success' => true, 'pdf_base64' => $body['data']['pdf_base64']];
                 }
-
-                // Naniva devuelve bytes crudos → convertir a base64
                 return ['success' => true, 'pdf_base64' => base64_encode($response->body())];
             }
 
@@ -173,13 +182,6 @@ class FacturacionService
     {
         try {
             $response = $this->downloadClient()->get("/comprobantes/{$filename}/xml");
-            Log::error('getXml debug', [
-                'filename' => $filename,
-                'status'   => $response->status(),
-                'body'     => substr($response->body(), 0, 500),
-                'baseUrl'  => $this->baseUrl,
-                'ruc'      => $this->rucEmisor,
-            ]);
             if ($response->successful()) {
                 $body = $response->body();
                 $json = json_decode($body, true);
@@ -190,7 +192,6 @@ class FacturacionService
             }
             return ['success' => false, 'error' => 'HTTP ' . $response->status() . ': ' . substr($response->body(), 0, 200)];
         } catch (\Throwable $e) {
-            Log::error('getXml excepción', ['filename' => $filename, 'msg' => $e->getMessage()]);
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
@@ -199,11 +200,6 @@ class FacturacionService
     {
         try {
             $response = $this->downloadClient()->get("/comprobantes/{$filename}/cdr");
-            Log::error('getCdr debug', [
-                'filename' => $filename,
-                'status'   => $response->status(),
-                'body'     => substr($response->body(), 0, 500),
-            ]);
             if ($response->successful()) {
                 $body = $response->body();
                 $json = json_decode($body, true);
@@ -214,7 +210,6 @@ class FacturacionService
             }
             return ['success' => false, 'error' => 'HTTP ' . $response->status() . ': ' . substr($response->body(), 0, 200)];
         } catch (\Throwable $e) {
-            Log::error('getCdr excepción', ['filename' => $filename, 'msg' => $e->getMessage()]);
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
