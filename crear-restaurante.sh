@@ -11,7 +11,7 @@ NPM_EMAIL="paolosolisgomez1@gmail.com"
 NPM_PASSWORD="Paolosu123."
 API_URL="https://restoapi.naniva.cloud/api"
 FRONTEND_HOST="restaurante-frontend"
-FRONTEND_PORT=8101
+FRONTEND_PORT=80
 APP_CONTAINER="restaurante-app"
 
 # ── Argumentos ──────────────────────────────────────────────────
