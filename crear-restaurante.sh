@@ -28,10 +28,6 @@ if [ -z "$NOMBRE" ] || [ -z "$DOMINIO" ] || [ -z "$EMAIL" ]; then
     exit 1
 fi
 
-json_get() {
-    python3 -c "import sys,json; d=json.load(sys.stdin); print($1)" 2>/dev/null || echo ""
-}
-
 echo ""
 echo "════════════════════════════════════════════════════════"
 echo "  Nuevo Restaurante: $NOMBRE"
@@ -92,12 +88,14 @@ if [ -z "$NPM_TOKEN" ]; then
 fi
 echo "  ✓ Conectado a NPM"
 
-# ── Paso 4: Crear proxy host ────────────────────────────────────
+# ── Paso 4: Crear proxy host con SSL (como lo hace la UI de NPM) ─
 echo ""
-echo "→ [4/4] Creando proxy host en NPM..."
+echo "→ [4/4] Creando proxy host con certificado SSL..."
 
-# Primero crear el proxy sin SSL
-NPM_HOST=$(curl -s -X POST "$NPM_URL/api/nginx/proxy-hosts" \
+# Crear proxy y solicitar Let's Encrypt en una sola llamada
+# Esto replica exactamente lo que hace la UI de NPM cuando seleccionas
+# "Request a new Certificate" con Force SSL activado
+NPM_HOST=$(curl -s --max-time 120 -X POST "$NPM_URL/api/nginx/proxy-hosts" \
     -H "Authorization: Bearer $NPM_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
@@ -105,64 +103,131 @@ NPM_HOST=$(curl -s -X POST "$NPM_URL/api/nginx/proxy-hosts" \
         \"forward_scheme\": \"http\",
         \"forward_host\": \"$FRONTEND_HOST\",
         \"forward_port\": $FRONTEND_PORT,
-        \"ssl_forced\": false,
+        \"ssl_forced\": true,
         \"http2_support\": true,
         \"block_exploits\": true,
         \"allow_websocket_upgrade\": true,
         \"enabled\": true,
-        \"certificate_id\": 0
+        \"certificate_id\": \"new\",
+        \"meta\": {
+            \"letsencrypt_agree\": true,
+            \"letsencrypt_email\": \"$NPM_EMAIL\",
+            \"dns_challenge\": false
+        }
     }")
 
-NPM_ID=$(echo "$NPM_HOST" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id','?'))" 2>/dev/null || echo "?")
+NPM_ID=$(echo "$NPM_HOST" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cid = d.get('id', '')
+print(cid if cid else '')
+" 2>/dev/null || echo "")
 
-if [ "$NPM_ID" != "?" ] && [ -n "$NPM_ID" ]; then
+CERT_ID=$(echo "$NPM_HOST" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cid = d.get('certificate_id', 0)
+print(cid if cid and cid != '0' else 0)
+" 2>/dev/null || echo "0")
+
+if [ -n "$NPM_ID" ] && [ "$NPM_ID" != "None" ]; then
     echo "  ✓ Proxy host creado (NPM ID: $NPM_ID)"
 
-    # Solicitar certificado Let's Encrypt para el nuevo dominio
-    echo "  ~ Solicitando certificado SSL Let's Encrypt..."
-    CERT_RESPONSE=$(curl -s -X POST "$NPM_URL/api/nginx/certificates" \
-        -H "Authorization: Bearer $NPM_TOKEN" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"provider\": \"letsencrypt\",
-            \"domain_names\": [\"$DOMINIO\"],
-            \"meta\": {\"letsencrypt_agree\": true, \"letsencrypt_email\": \"$NPM_EMAIL\"}
-        }")
+    if [ "$CERT_ID" != "0" ] && [ -n "$CERT_ID" ]; then
+        echo "  ✓ SSL activado automáticamente (Cert ID: $CERT_ID)"
+        SSL_OK=true
+    else
+        # El proxy se creó pero sin SSL (puede pasar si LE falló internamente)
+        # Intentar solicitar el certificado por separado
+        echo "  ~ Proxy creado sin SSL — intentando solicitar certificado aparte..."
+        sleep 5
 
-    NEW_CERT_ID=$(echo "$CERT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',0))" 2>/dev/null || echo "0")
-
-    if [ "$NEW_CERT_ID" != "0" ] && [ -n "$NEW_CERT_ID" ]; then
-        echo "  ✓ Certificado SSL generado (ID: $NEW_CERT_ID)"
-
-        # Actualizar proxy host con el certificado y forzar SSL
-        curl -s -X PUT "$NPM_URL/api/nginx/proxy-hosts/$NPM_ID" \
+        CERT_RESPONSE=$(curl -s --max-time 120 -X POST "$NPM_URL/api/nginx/certificates" \
             -H "Authorization: Bearer $NPM_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{
+                \"provider\": \"letsencrypt\",
                 \"domain_names\": [\"$DOMINIO\"],
-                \"forward_scheme\": \"http\",
-                \"forward_host\": \"$FRONTEND_HOST\",
-                \"forward_port\": $FRONTEND_PORT,
-                \"ssl_forced\": true,
-                \"http2_support\": true,
-                \"block_exploits\": true,
-                \"allow_websocket_upgrade\": true,
-                \"enabled\": true,
-                \"certificate_id\": $NEW_CERT_ID
-            }" > /dev/null
-        echo "  ✓ SSL activado y forzado"
-    else
-        echo "  ~ SSL pendiente — actívalo manualmente en NPM editando el proxy host"
+                \"meta\": {
+                    \"letsencrypt_agree\": true,
+                    \"letsencrypt_email\": \"$NPM_EMAIL\",
+                    \"dns_challenge\": false
+                }
+            }")
+
+        NEW_CERT_ID=$(echo "$CERT_RESPONSE" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cid = d.get('id', 0)
+if isinstance(cid, int) and cid > 0:
+    print(cid)
+elif isinstance(cid, str) and cid.isdigit() and int(cid) > 0:
+    print(cid)
+else:
+    print(0)
+" 2>/dev/null || echo "0")
+
+        if [ "$NEW_CERT_ID" != "0" ] && [ -n "$NEW_CERT_ID" ]; then
+            echo "  ✓ Certificado SSL generado (ID: $NEW_CERT_ID)"
+
+            # Actualizar proxy con el certificado
+            curl -s -X PUT "$NPM_URL/api/nginx/proxy-hosts/$NPM_ID" \
+                -H "Authorization: Bearer $NPM_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{
+                    \"domain_names\": [\"$DOMINIO\"],
+                    \"forward_scheme\": \"http\",
+                    \"forward_host\": \"$FRONTEND_HOST\",
+                    \"forward_port\": $FRONTEND_PORT,
+                    \"ssl_forced\": true,
+                    \"http2_support\": true,
+                    \"block_exploits\": true,
+                    \"allow_websocket_upgrade\": true,
+                    \"enabled\": true,
+                    \"certificate_id\": $NEW_CERT_ID
+                }" > /dev/null
+
+            echo "  ✓ SSL activado y forzado"
+            SSL_OK=true
+        else
+            # Mostrar el error exacto de NPM para diagnóstico
+            CERT_ERR=$(echo "$CERT_RESPONSE" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+err = d.get('error', {})
+if isinstance(err, dict):
+    print(err.get('message', json.dumps(d)))
+else:
+    print(json.dumps(d))
+" 2>/dev/null || echo "$CERT_RESPONSE")
+            echo "  ✗ No se pudo generar SSL automáticamente"
+            echo "    Respuesta NPM: $CERT_ERR"
+            echo "  → Actívalo manualmente: NPM → edita el proxy → SSL → Let's Encrypt → Force SSL → Save"
+            SSL_OK=false
+        fi
     fi
 else
-    ERROR=$(echo "$NPM_HOST" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',{}).get('message','?'))" 2>/dev/null || echo "?")
-    echo "  ✗ Error en NPM: $ERROR"
+    ERR=$(echo "$NPM_HOST" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+err = d.get('error', {})
+if isinstance(err, dict):
+    print(err.get('message', json.dumps(d)))
+else:
+    print(json.dumps(d))
+" 2>/dev/null || echo "$NPM_HOST")
+    echo "  ✗ Error creando proxy: $ERR"
+    SSL_OK=false
 fi
 
-# ── Resumen ─────────────────────────────────────────────────────
+# ── Resumen ─────────────────────────────────────────════════════
 echo ""
 echo "════════════════════════════════════════════════════════"
-echo "  ✓  ¡Restaurante creado exitosamente!"
+if [ "$SSL_OK" = "true" ]; then
+    echo "  ✓  ¡Restaurante creado exitosamente con SSL!"
+else
+    echo "  ✓  ¡Restaurante creado! (SSL pendiente — ver instrucciones arriba)"
+fi
 echo ""
 echo "  URL:           https://$DOMINIO"
 echo "  Usuario:       $EMAIL"
