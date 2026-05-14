@@ -29,28 +29,21 @@ class FacturacionService
     private function tenantFacturacionConfig(): array
     {
         try {
-            $db  = config('database.connections.mysql.database', 'N/A');
-            $row = DB::table('facturacion_config')->first();
-            Log::error('[FacturacionService] tenantFacturacionConfig', [
-                'mysql_db'  => $db,
-                'row_found' => (bool) $row,
-                'token_set' => $row ? !empty($row->token) : false,
-                'ruc'       => $row->ruc_emisor ?? 'none',
-            ]);
-            if (!$row || empty($row->token)) {
+            $tenantId = optional(\tenant())->getTenantKey();
+            if (!$tenantId) {
+                $req      = \app('request');
+                $tenantId = $req->header('X-Tenant') ?? $req->get('tenant');
+            }
+            if (!$tenantId) {
                 return [];
             }
-            return [
-                'api_url'       => $row->api_url,
-                'token'         => $row->token,
-                'ruc_emisor'    => $row->ruc_emisor,
-                'razon_social'  => $row->razon_social,
-                'direccion'     => $row->direccion,
-                'serie_boleta'  => $row->serie_boleta,
-                'serie_factura' => $row->serie_factura,
-            ];
+            $raw  = DB::connection('central')
+                ->table('tenants')
+                ->where('id', $tenantId)
+                ->value('data');
+            $data = json_decode($raw ?? '{}', true);
+            return $data['facturacion'] ?? [];
         } catch (\Throwable $e) {
-            Log::error('[FacturacionService] tenantFacturacionConfig ERROR', ['error' => $e->getMessage()]);
             return [];
         }
     }

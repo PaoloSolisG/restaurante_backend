@@ -7,17 +7,27 @@ use Illuminate\Support\Facades\DB;
 
 class ConfiguracionController extends Controller
 {
+    private function tenantId(): ?string
+    {
+        $id = optional(tenant())->getTenantKey();
+        if (!$id) {
+            $req = app('request');
+            $id  = $req->header('X-Tenant') ?? $req->get('tenant');
+        }
+        return $id ?: null;
+    }
+
     public function show()
     {
-        // Nombre/email del tenant vienen del DB central
-        $t   = tenant();
+        $tenantId = $this->tenantId();
+
         $row = DB::connection('central')
                     ->table('tenants')
-                    ->where('id', $t->getTenantKey())
+                    ->where('id', $tenantId)
                     ->first();
 
-        // Configuración de facturación viene del DB propio del tenant
-        $fc = DB::table('facturacion_config')->first();
+        $data = json_decode($row->data ?? '{}', true);
+        $fc   = $data['facturacion'] ?? [];
 
         return response()->json([
             'restaurante' => [
@@ -25,13 +35,13 @@ class ConfiguracionController extends Controller
                 'email'  => $row->email  ?? '',
             ],
             'facturacion' => [
-                'api_url'       => $fc->api_url       ?? 'https://fe.naniva.cloud/api/v1',
-                'token'         => $fc->token          ?? '',
-                'ruc_emisor'    => $fc->ruc_emisor     ?? '',
-                'razon_social'  => $fc->razon_social   ?? '',
-                'direccion'     => $fc->direccion      ?? '',
-                'serie_boleta'  => $fc->serie_boleta   ?? 'B001',
-                'serie_factura' => $fc->serie_factura  ?? 'F001',
+                'api_url'       => $fc['api_url']       ?? 'https://fe.naniva.cloud/api/v1',
+                'token'         => $fc['token']         ?? '',
+                'ruc_emisor'    => $fc['ruc_emisor']    ?? '',
+                'razon_social'  => $fc['razon_social']  ?? '',
+                'direccion'     => $fc['direccion']     ?? '',
+                'serie_boleta'  => $fc['serie_boleta']  ?? 'B001',
+                'serie_factura' => $fc['serie_factura'] ?? 'F001',
             ],
         ]);
     }
@@ -50,6 +60,11 @@ class ConfiguracionController extends Controller
             'facturacion.serie_factura' => 'sometimes|string|max:10',
         ]);
 
+        $tenantId = $this->tenantId();
+
+        $row  = DB::connection('central')->table('tenants')->where('id', $tenantId)->first();
+        $data = json_decode($row->data ?? '{}', true);
+
         // Actualizar nombre/email del tenant en DB central
         if ($request->has('restaurante')) {
             $rest    = $request->input('restaurante');
@@ -60,27 +75,29 @@ class ConfiguracionController extends Controller
             if ($updates) {
                 DB::connection('central')
                     ->table('tenants')
-                    ->where('id', tenant()->getTenantKey())
+                    ->where('id', $tenantId)
                     ->update($updates);
             }
         }
 
-        // Actualizar facturación en DB propia del tenant
+        // Actualizar facturación en el campo data JSON del tenant
         if ($request->has('facturacion')) {
             $fc = $request->input('facturacion');
-            DB::table('facturacion_config')->updateOrInsert(
-                ['id' => 1],
-                array_filter([
-                    'api_url'       => $fc['api_url']       ?? null,
-                    'token'         => $fc['token']          ?? null,
-                    'ruc_emisor'    => $fc['ruc_emisor']     ?? null,
-                    'razon_social'  => $fc['razon_social']   ?? null,
-                    'direccion'     => $fc['direccion']      ?? null,
-                    'serie_boleta'  => $fc['serie_boleta']   ?? null,
-                    'serie_factura' => $fc['serie_factura']  ?? null,
-                    'updated_at'    => now(),
-                ], fn($v) => $v !== null)
-            );
+            $existing = $data['facturacion'] ?? [];
+            $data['facturacion'] = array_merge($existing, array_filter([
+                'api_url'       => $fc['api_url']       ?? null,
+                'token'         => $fc['token']         ?? null,
+                'ruc_emisor'    => $fc['ruc_emisor']    ?? null,
+                'razon_social'  => $fc['razon_social']  ?? null,
+                'direccion'     => $fc['direccion']     ?? null,
+                'serie_boleta'  => $fc['serie_boleta']  ?? null,
+                'serie_factura' => $fc['serie_factura'] ?? null,
+            ], fn($v) => $v !== null));
+
+            DB::connection('central')
+                ->table('tenants')
+                ->where('id', $tenantId)
+                ->update(['data' => json_encode($data)]);
         }
 
         return response()->json(['message' => 'Configuración guardada correctamente']);
