@@ -248,6 +248,22 @@ class FacturacionService
      */
     public function reenviar(string|int $comprobanteId): array
     {
+        // Si nos dan un filename (ej: "20615608221-01-F001-22") en vez de un ID numérico,
+        // buscar el ID numérico en Naniva antes de enviar. Naniva devuelve 500 con filenames.
+        $nanivaIdResuelto = null;
+        if (is_string($comprobanteId) && !is_numeric($comprobanteId)) {
+            $nanivaIdResuelto = $this->resolverNanivaIdPorFilename($comprobanteId);
+            if ($nanivaIdResuelto) {
+                Log::info('Naniva reenviar: filename resuelto a ID numérico', [
+                    'filename'  => $comprobanteId,
+                    'naniva_id' => $nanivaIdResuelto,
+                ]);
+                $comprobanteId = $nanivaIdResuelto;
+            } else {
+                Log::warning('Naniva reenviar: no se pudo resolver ID para filename', ['filename' => $comprobanteId]);
+            }
+        }
+
         try {
             $response = $this->client()->post("/comprobantes/{$comprobanteId}/enviar");
 
@@ -288,7 +304,8 @@ class FacturacionService
 
             return [
                 'success'      => $success,
-                'estado_sunat' => $estadoLocal,  // null si Naniva devolvió error HTTP
+                'naniva_id'    => $nanivaIdResuelto,  // ID numérico encontrado (para persistirlo en DB)
+                'estado_sunat' => $estadoLocal,        // null si Naniva devolvió error HTTP
                 'error'        => $errorInfo ?? ($success ? null : ($body['message'] ?? "Naniva HTTP {$response->status()}")),
                 'data'         => $body,
             ];
@@ -662,6 +679,50 @@ class FacturacionService
 
         } catch (\Throwable $e) {
             Log::warning('Naniva recovery GET /comprobantes falló', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Dado un filename como "20615608221-01-F001-22", busca el ID numérico en Naniva
+     * consultando GET /comprobantes. Naniva requiere ID numérico para /comprobantes/{id}/enviar.
+     */
+    private function resolverNanivaIdPorFilename(string $filename): ?int
+    {
+        try {
+            // filename = RUC-TIPO-SERIE-NUM  (ej: 20615608221-01-F001-22)
+            $partes   = explode('-', $filename);
+            $tipoDoc  = $partes[1] ?? null;             // "01"
+            $serieNum = implode('-', array_slice($partes, 2)); // "F001-22"
+            $serie    = $partes[2] ?? null;             // "F001"
+
+            if (!$tipoDoc || !$serie) {
+                return null;
+            }
+
+            $response = $this->client()->get('/comprobantes', [
+                'tipo_documento' => $tipoDoc,
+                'serie'          => $serie,
+                'per_page'       => 20,
+            ]);
+
+            if (!$response->successful()) {
+                return null;
+            }
+
+            $body  = $response->json();
+            $items = $body['data']['data'] ?? $body['data'] ?? [];
+
+            foreach ((array) $items as $item) {
+                $itemNumero = $item['serie_numero'] ?? $item['numero'] ?? null;
+                if ($itemNumero === $serieNum && isset($item['id'])) {
+                    return (int) $item['id'];
+                }
+            }
+
+            return null;
+        } catch (\Throwable $e) {
+            Log::warning('resolverNanivaIdPorFilename falló', ['filename' => $filename, 'error' => $e->getMessage()]);
             return null;
         }
     }

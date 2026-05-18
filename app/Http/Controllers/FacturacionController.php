@@ -90,6 +90,10 @@ class FacturacionController extends Controller
         if ($result['estado_sunat'] !== null) {
             $updates['estado_sunat'] = $result['estado_sunat'];
         }
+        // Persistir naniva_id si se resolvió automáticamente por filename
+        if (!empty($result['naniva_id']) && !$venta->naniva_id) {
+            $updates['naniva_id'] = $result['naniva_id'];
+        }
         $venta->update($updates);
 
         return response()->json([
