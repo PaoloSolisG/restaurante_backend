@@ -130,25 +130,14 @@ class FacturacionService
             $numero       = $data['numero']   ?? null;
             $filename     = $data['filename'] ?? ($numero ? "{$this->rucEmisor}-{$tipoDoc}-{$numero}" : null);
             $estadoNaniva = $data['estado']   ?? null;
+            $sunatCodigo  = isset($data['sunat']['codigo']) ? (int) $data['sunat']['codigo'] : null;
+            $sunatMensaje = $data['sunat']['mensaje'] ?? null;
 
-            // Código y mensaje exacto que SUNAT devolvió (dentro de data.sunat)
-            $sunatCodigo  = $data['sunat']['codigo']  ?? null;
-            $sunatMensaje = $data['sunat']['mensaje']  ?? null;
-
-            // Si Naniva asignó número → guardarlo siempre.
-            // Estado local: solo "Aceptado" cuando SUNAT realmente lo aceptó.
-            // Cualquier rechazo (incluyendo el bug 306 del entorno beta que afecta
-            // a todos) se guarda como "Enviado" para poder reenviar sin duplicar.
             if ($numero) {
-                $esAceptado  = ($estadoNaniva === 'Aceptado');
-                $estadoLocal = $esAceptado ? 'Aceptado' : 'Enviado';
-
-                $errorInfo = null;
-                if (!$esAceptado) {
-                    $errorInfo = $sunatCodigo !== null
-                        ? "SUNAT {$sunatCodigo}: {$sunatMensaje}"
-                        : ($body['message'] ?? 'Comprobante enviado, pendiente confirmación SUNAT');
-                }
+                $estadoLocal = $this->clasificarEstadoSunat($sunatCodigo, $estadoNaniva);
+                $errorInfo   = ($estadoLocal !== 'Aceptado' && $sunatCodigo !== null)
+                    ? "SUNAT {$sunatCodigo}: {$sunatMensaje}"
+                    : null;
 
                 return [
                     'success'            => true,
@@ -523,6 +512,22 @@ class FacturacionService
     }
 
     // ── Helpers privados ──────────────────────────────────────────────────────
+
+    /**
+     * Clasifica el estado local según el código SUNAT:
+     *   sin código / 0          → Aceptado
+     *   4000+                   → Aceptado  (observaciones: registrado con advertencias)
+     *   2000–3999               → Rechazado (CDR rechazada: no registrado en SUNAT)
+     *   100–1999                → Excepcion (excepción técnica: no registrado, se puede reenviar)
+     */
+    private function clasificarEstadoSunat(?int $codigo, ?string $estadoNaniva): string
+    {
+        if ($estadoNaniva === 'Aceptado') return 'Aceptado';
+        if ($codigo === null || $codigo === 0) return 'Aceptado';
+        if ($codigo >= 4000) return 'Aceptado';   // observaciones — registrado con advertencias
+        if ($codigo >= 2000) return 'Rechazado';  // error de negocio — CDR de rechazo emitida
+        return 'Excepcion';                        // 100-1999: excepción técnica SUNAT, sin CDR
+    }
 
     /**
      * Consulta GET /comprobantes en Naniva para recuperar el último documento
