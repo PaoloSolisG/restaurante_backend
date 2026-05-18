@@ -31,6 +31,7 @@ class Venta extends Model
         'serie_comprobante',
         'numero_comprobante',
         'filename_comprobante',
+        'naniva_id',
         'estado_sunat',
         'error_comprobante',
         // Anulación

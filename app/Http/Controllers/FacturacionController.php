@@ -140,6 +140,7 @@ class FacturacionController extends Controller
             'serie_comprobante'    => $result['serie_comprobante']  ?? $venta->serie_comprobante,
             'numero_comprobante'   => $result['numero_comprobante'] ?? $venta->numero_comprobante,
             'filename_comprobante' => $result['filename']           ?? $venta->filename_comprobante,
+            'naniva_id'            => $result['naniva_id']          ?? $venta->naniva_id,
             'estado_sunat'         => $result['estado_sunat']       ?? $venta->estado_sunat,
             'error_comprobante'    => $result['error'],
         ]);
