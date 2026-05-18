@@ -110,7 +110,9 @@ class FacturacionService
             $bodyRaw = $response->body();
             $body    = json_decode($bodyRaw, true);
             if (!is_array($body) && $bodyRaw !== '') {
-                $jsonStart = strpos($bodyRaw, '{');
+                // El prefijo "ERROR - ... {urn:oasis:...}Note..." contiene llaves '{' propias
+                // del namespace UBL. Buscamos '{"' para saltar al inicio real del JSON.
+                $jsonStart = strpos($bodyRaw, '{"');
                 if ($jsonStart !== false) {
                     $body = json_decode(substr($bodyRaw, $jsonStart), true);
                 }
@@ -176,6 +178,7 @@ class FacturacionService
                     'numero'   => $nRec,
                     'estado'   => $eRec,
                 ]);
+                $eRec = ($eRec === 'Aceptado') ? 'Aceptado' : 'Enviado';
                 return [
                     'success'            => true,
                     'tipo_comprobante'   => $tipoDoc,
@@ -183,7 +186,7 @@ class FacturacionService
                     'numero_comprobante' => $nRec,
                     'filename'           => $fRec,
                     'estado_sunat'       => $eRec,
-                    'error'              => $errorMsg,
+                    'error'              => $body['message'] ?? null,
                 ];
             }
 
@@ -194,7 +197,7 @@ class FacturacionService
             ]);
             return [
                 'success' => false,
-                'error'   => $errorMsg ?? 'Naniva no procesó el comprobante',
+                'error'   => $body['message'] ?? 'Naniva no procesó el comprobante',
             ];
 
         } catch (\Throwable $e) {
