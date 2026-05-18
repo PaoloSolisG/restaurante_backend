@@ -209,15 +209,31 @@ class FacturacionService
                 'mode' => 'base64',
             ]);
 
+            $rawBody = $response->body(); // leer UNA sola vez (stream chunked)
+
+            Log::info('Naniva getPdf', [
+                'filename' => $filename,
+                'status'   => $response->status(),
+                'body_raw' => substr($rawBody, 0, 500),
+            ]);
+
             if ($response->successful()) {
-                $body = $response->json();
-                if ($body && !empty($body['data']['pdf_base64'])) {
-                    return ['success' => true, 'pdf_base64' => $body['data']['pdf_base64']];
+                $json = json_decode($rawBody, true);
+                if (!is_array($json)) {
+                    // Puede tener prefijo ERROR - ... seguido del JSON
+                    $start = strpos($rawBody, '{"');
+                    if ($start !== false) {
+                        $json = json_decode(substr($rawBody, $start), true);
+                    }
                 }
-                return ['success' => true, 'pdf_base64' => base64_encode($response->body())];
+                if (is_array($json) && !empty($json['data']['pdf_base64'])) {
+                    return ['success' => true, 'pdf_base64' => $json['data']['pdf_base64']];
+                }
+                // Si Naniva devuelve el PDF binario directamente
+                return ['success' => true, 'pdf_base64' => base64_encode($rawBody)];
             }
 
-            return ['success' => false, 'error' => 'No se pudo obtener el PDF — status: ' . $response->status()];
+            return ['success' => false, 'error' => "PDF no disponible (HTTP {$response->status()})"];
         } catch (\Throwable $e) {
             return ['success' => false, 'error' => $e->getMessage()];
         }
@@ -526,7 +542,7 @@ class FacturacionService
         if ($codigo === null || $codigo === 0) return 'Aceptado';
         if ($codigo >= 4000) return 'Aceptado';   // observaciones — registrado con advertencias
         if ($codigo >= 2000) return 'Rechazado';  // error de negocio — CDR de rechazo emitida
-        return 'Excepcion';                        // 100-1999: excepción técnica SUNAT, sin CDR
+        return 'Enviado';                          // 100-1999: excepción técnica SUNAT, sin CDR, reintentable
     }
 
     /**
@@ -622,7 +638,11 @@ class FacturacionService
     {
         return Http::baseUrl($this->baseUrl)
             ->withToken($this->token)
-            ->timeout(15);
+            ->withHeaders([
+                'X-Emisor-RUC' => $this->rucEmisor,
+                'Accept'       => 'application/json',
+            ])
+            ->timeout(30);
     }
 
     private function resolverTipoYSerie(Venta $venta): array
