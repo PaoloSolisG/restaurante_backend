@@ -86,47 +86,56 @@ class FacturacionService
 
         try {
             $response = $this->client()->post('/emitir', $payload);
-            $body     = $response->json();
+            $body     = $response->json() ?? [];
 
-            Log::info('Naniva response', ['venta_id' => $venta->id, 'status' => $response->status(), 'body' => $body]);
+            // Log completo para diagnóstico — ver storage/logs/laravel.log
+            Log::info('Naniva emitir response', [
+                'venta_id'   => $venta->id,
+                'http_status'=> $response->status(),
+                'body'       => $body,
+            ]);
 
-            if ($response->successful() && ($body['success'] ?? false)) {
+            // Extraer numero SIN IMPORTAR si success=true o false.
+            // Naniva asigna el correlativo antes de enviarlo a SUNAT,
+            // por lo que puede estar en la respuesta aunque SUNAT rechace.
+            $data     = is_array($body['data'] ?? null) ? $body['data'] : [];
+            $numero   = $data['numero']   ?? null;
+            $filename = $data['filename'] ?? ($numero ? "{$this->rucEmisor}-{$tipoDoc}-{$numero}" : null);
+            $estado   = $data['estado']   ?? null;
+            $errorMsg = $body['message']  ?? ($data['error'] ?? null);
+
+            // Si Naniva asignó número → guardarlo siempre y marcar como enviado.
+            // El estado real de SUNAT (Aceptado/Rechazado) se refleja en $estado.
+            if ($numero) {
+                $esAceptado = $response->successful() && ($body['success'] ?? false);
                 return [
-                    'success'            => true,
+                    'success'            => true,   // tiene correlativo, fue enviado a Naniva
                     'tipo_comprobante'   => $tipoDoc,
                     'serie_comprobante'  => $serie,
-                    'numero_comprobante' => $body['data']['numero']   ?? null,
-                    'filename'           => $body['data']['filename']
-                        ?? ($body['data']['numero']
-                            ? "{$this->rucEmisor}-{$tipoDoc}-{$body['data']['numero']}"
-                            : null),
-                    'estado_sunat'       => $body['data']['estado']   ?? null,
-                    'error'              => null,
+                    'numero_comprobante' => $numero,
+                    'filename'           => $filename,
+                    'estado_sunat'       => $estado ?? ($esAceptado ? 'Procesado' : 'Enviado'),
+                    'error'              => $esAceptado ? null : $errorMsg,
                 ];
             }
 
-            // Naniva pudo asignar un número aunque SUNAT lo rechace.
-            // Lo devolvemos igual para guardarlo en BD y evitar generar
-            // un correlativo nuevo en cada reintento.
-            $assignedNumero   = $body['data']['numero']   ?? null;
-            $assignedFilename = $body['data']['filename']
-                ?? ($assignedNumero ? "{$this->rucEmisor}-{$tipoDoc}-{$assignedNumero}" : null);
-            $assignedEstado   = $body['data']['estado']   ?? null;
-            $errorMsg = $body['message'] ?? ($body['data']['error'] ?? 'Error desconocido al emitir comprobante');
-
-            Log::error('Naniva emitir fallido', ['venta_id' => $venta->id, 'payload' => $payload, 'response' => $body]);
+            // Naniva no asignó número: fallo total (no llegó a procesarse)
+            Log::error('Naniva sin numero asignado', [
+                'venta_id' => $venta->id,
+                'body'     => $body,
+            ]);
             return [
-                'success'            => false,
-                'error'              => $errorMsg,
-                'tipo_comprobante'   => $assignedNumero ? $tipoDoc : null,
-                'serie_comprobante'  => $assignedNumero ? $serie   : null,
-                'numero_comprobante' => $assignedNumero,
-                'filename'           => $assignedFilename,
-                'estado_sunat'       => $assignedEstado,
+                'success' => false,
+                'error'   => $errorMsg ?? 'Naniva no procesó el comprobante',
             ];
+
         } catch (\Throwable $e) {
-            Log::error('Naniva excepción', ['venta_id' => $venta->id, 'msg' => $e->getMessage()]);
-            return ['success' => false, 'error' => $e->getMessage()];
+            Log::error('Naniva excepción/timeout', [
+                'venta_id' => $venta->id,
+                'error'    => $e->getMessage(),
+                'class'    => get_class($e),
+            ]);
+            return ['success' => false, 'error' => 'Servicio de facturación no disponible'];
         }
     }
 

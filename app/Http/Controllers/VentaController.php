@@ -201,10 +201,11 @@ class VentaController extends Controller
             ]);
 
             $comprobanteInfo = [
-                'emitido'            => $result['success'],
+                // emitido=true si tiene correlativo asignado por Naniva
+                'emitido'            => !empty($venta->numero_comprobante),
                 'numero_comprobante' => $venta->numero_comprobante,
                 'estado_sunat'       => $venta->estado_sunat,
-                'error'              => $result['success'] ? null : $result['error'],
+                'error'              => !empty($venta->numero_comprobante) ? ($result['error'] ?? null) : ($result['error'] ?? null),
             ];
         }
 
