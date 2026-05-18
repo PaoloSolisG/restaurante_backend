@@ -135,20 +135,23 @@ class FacturacionService
                 'body'     => $body,
             ]);
 
-            $numeroRecuperado = $this->recuperarCorrelativoReciente($tipoDoc, $serie);
-            if ($numeroRecuperado) {
-                $filenameRecuperado = "{$this->rucEmisor}-{$tipoDoc}-{$numeroRecuperado}";
+            $recuperado = $this->recuperarCorrelativoReciente($tipoDoc, $serie);
+            if ($recuperado) {
+                $nRec = $recuperado['numero'];
+                $fRec = $recuperado['filename'] ?? "{$this->rucEmisor}-{$tipoDoc}-{$nRec}";
+                $eRec = $recuperado['estado'];
                 Log::info('Naniva correlativo recuperado por GET /comprobantes', [
                     'venta_id' => $venta->id,
-                    'numero'   => $numeroRecuperado,
+                    'numero'   => $nRec,
+                    'estado'   => $eRec,
                 ]);
                 return [
                     'success'            => true,
                     'tipo_comprobante'   => $tipoDoc,
                     'serie_comprobante'  => $serie,
-                    'numero_comprobante' => $numeroRecuperado,
-                    'filename'           => $filenameRecuperado,
-                    'estado_sunat'       => 'Enviado',
+                    'numero_comprobante' => $nRec,
+                    'filename'           => $fRec,
+                    'estado_sunat'       => $eRec,
                     'error'              => $errorMsg,
                 ];
             }
@@ -488,11 +491,14 @@ class FacturacionService
     // ── Helpers privados ──────────────────────────────────────────────────────
 
     /**
-     * Consulta GET /comprobantes en Naniva para recuperar el correlativo
-     * del documento más reciente del tipo/serie indicado.
+     * Consulta GET /comprobantes en Naniva para recuperar el último documento
+     * del tipo/serie indicado. Retorna array con numero, filename y estado, o null.
      * Se usa cuando POST /emitir no devolvió el número en la respuesta.
+     *
+     * El campo de número en el listado de Naniva es "serie_numero" (ej: "F001-2"),
+     * no "numero". El filename completo también viene en "filename".
      */
-    private function recuperarCorrelativoReciente(string $tipoDoc, string $serie): ?string
+    private function recuperarCorrelativoReciente(string $tipoDoc, string $serie): ?array
     {
         try {
             $response = $this->client()->get('/comprobantes', [
@@ -521,10 +527,19 @@ class FacturacionService
                 return null;
             }
 
-            $latest    = $items[0];
-            $createdAt = $latest['created_at'] ?? $latest['fecha_emision'] ?? $latest['FECHA_EMISION'] ?? null;
+            $latest = $items[0];
 
-            // Solo usar si fue creado hace menos de 3 minutos (correlación temporal con la venta actual)
+            // Naniva listado usa "serie_numero" (ej: "F001-2"), no "numero"
+            $numero = $latest['serie_numero'] ?? $latest['numero'] ?? $latest['NUMERO'] ?? null;
+
+            if (!$numero) {
+                Log::warning('Naniva recovery: no se encontró campo numero en item', ['item' => $latest]);
+                return null;
+            }
+
+            $createdAt = $latest['created_at'] ?? $latest['fecha_emision'] ?? null;
+
+            // Solo usar si fue creado hace menos de 3 minutos (correlación temporal)
             if ($createdAt) {
                 try {
                     $diff = now()->diffInSeconds(\Carbon\Carbon::parse($createdAt));
@@ -536,11 +551,15 @@ class FacturacionService
                         return null;
                     }
                 } catch (\Throwable) {
-                    // Si no parsea la fecha, igual intentamos usar el número
+                    // Si no parsea la fecha, usamos el número igual
                 }
             }
 
-            return $latest['numero'] ?? $latest['NUMERO'] ?? null;
+            return [
+                'numero'   => $numero,
+                'filename' => $latest['filename'] ?? null,
+                'estado'   => $latest['estado']   ?? 'Enviado',
+            ];
 
         } catch (\Throwable $e) {
             Log::warning('Naniva recovery GET /comprobantes falló', ['error' => $e->getMessage()]);
