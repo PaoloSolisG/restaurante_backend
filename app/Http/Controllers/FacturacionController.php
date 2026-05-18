@@ -155,7 +155,54 @@ class FacturacionController extends Controller
         ], $result['success'] ? 200 : 502);
     }
 
+    /**
+     * POST /ventas/{id}/comprobante/vincular
+     * Vincula manualmente un correlativo de Naniva a una venta local.
+     * Útil cuando Naniva procesó el documento pero no devolvió el número en la respuesta.
+     */
+    public function vincular(Request $request, $id)
+    {
+        $venta = Venta::find($id);
+        if (!$venta) {
+            return response()->json(['status' => false, 'message' => 'Venta no encontrada'], 404);
+        }
 
+        $request->validate([
+            'numero_comprobante' => 'required|string|max:30',
+        ]);
+
+        $numero = trim($request->numero_comprobante);
+
+        // Determinar tipo y serie desde el número (ej: F001-1 → tipo=01, serie=F001)
+        $tipo  = str_starts_with($numero, 'F') ? '01' : '03';
+        $serie = explode('-', $numero)[0] ?? null;
+
+        // Construir filename usando el RUC del emisor configurado
+        $cfg = $this->facturacion->getConfig();
+        $ruc = $cfg['ruc_emisor'] ?? null;
+        $filename = $ruc ? "{$ruc}-{$tipo}-{$numero}" : null;
+
+        $venta->update([
+            'tipo_comprobante'     => $tipo,
+            'serie_comprobante'    => $serie,
+            'numero_comprobante'   => $numero,
+            'filename_comprobante' => $filename,
+            'estado_sunat'         => 'Enviado',
+            'error_comprobante'    => null,
+        ]);
+
+        AuditLog::registrar(
+            'comprobante.vincular', 'Venta', $venta->id,
+            "Comprobante {$numero} vinculado manualmente a Venta #{$venta->id}",
+            ['numero' => $numero, 'filename' => $filename]
+        );
+
+        return response()->json([
+            'status'  => true,
+            'message' => "Comprobante {$numero} vinculado correctamente",
+            'data'    => $venta->fresh(),
+        ]);
+    }
 
     public function xml($id)
     {

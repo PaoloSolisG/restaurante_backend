@@ -164,6 +164,7 @@ Route::middleware(['api', InitializeTenancyOptional::class])->group(function () 
             Route::post('/{id}/comprobante/emitir',           [FacturacionController::class, 'emitir']);
             Route::post('/{id}/comprobante/dar-baja',         [FacturacionController::class, 'darBaja']);
             Route::post('/{id}/comprobante/consultar-ticket', [FacturacionController::class, 'consultarTicketBaja']);
+            Route::post('/{id}/comprobante/vincular',         [FacturacionController::class, 'vincular']);
         });
 
         Route::get('/api/facturacion/status', [FacturacionController::class, 'status']);

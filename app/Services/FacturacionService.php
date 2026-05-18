@@ -48,6 +48,15 @@ class FacturacionService
         }
     }
 
+    public function getConfig(): array
+    {
+        return [
+            'ruc_emisor'   => $this->rucEmisor,
+            'serie_boleta' => $this->serieBoleta,
+            'serie_factura'=> $this->serieFactura,
+        ];
+    }
+
     /** Verifica conexión con la API de Naniva */
     public function status(): array
     {
