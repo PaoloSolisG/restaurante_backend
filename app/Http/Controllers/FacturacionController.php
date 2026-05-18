@@ -83,15 +83,15 @@ class FacturacionController extends Controller
 
         $result = $this->facturacion->reenviar($venta->filename_comprobante);
 
-        if ($result['success']) {
-            $estadoNuevo = $result['data']['data']['estado'] ?? $venta->estado_sunat;
-            $venta->update(['estado_sunat' => $estadoNuevo]);
-        }
+        $venta->update([
+            'estado_sunat'     => $result['estado_sunat'] ?? $venta->estado_sunat,
+            'error_comprobante'=> $result['error'],
+        ]);
 
         return response()->json([
             'status'  => $result['success'],
-            'message' => $result['success'] ? 'Comprobante reenviado a SUNAT' : $result['error'],
-            'data'    => $result['data'] ?? null,
+            'message' => $result['success'] ? 'Comprobante reenviado a SUNAT' : ($result['error'] ?? 'Error al reenviar'),
+            'data'    => $venta->fresh(),
         ], $result['success'] ? 200 : 502);
     }
 

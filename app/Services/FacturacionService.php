@@ -247,14 +247,44 @@ class FacturacionService
     {
         try {
             $response = $this->client()->post("/comprobantes/{$comprobanteId}/enviar");
-            $body     = $response->json();
+
+            // Mismo patrón que emitir(): leer body UNA vez y parsear manualmente
+            $bodyRaw = $response->body();
+            $body    = json_decode($bodyRaw, true);
+            if (!is_array($body) && $bodyRaw !== '') {
+                $start = strpos($bodyRaw, '{"');
+                if ($start !== false) {
+                    $body = json_decode(substr($bodyRaw, $start), true);
+                }
+            }
+            $body = is_array($body) ? $body : [];
+
+            Log::info('Naniva reenviar RESPONSE', [
+                'comprobante' => $comprobanteId,
+                'http_status' => $response->status(),
+                'body_raw'    => substr($bodyRaw, 0, 2000),
+                'body_parsed' => $body,
+            ]);
+
+            $data         = is_array($body['data'] ?? null) ? $body['data'] : [];
+            $sunatCodigo  = isset($data['sunat']['codigo']) ? (int) $data['sunat']['codigo'] : null;
+            $estadoNaniva = $data['estado'] ?? null;
+            $estadoLocal  = $this->clasificarEstadoSunat($sunatCodigo, $estadoNaniva);
+            $errorInfo    = ($estadoLocal !== 'Aceptado' && $sunatCodigo !== null)
+                ? "SUNAT {$sunatCodigo}: " . ($data['sunat']['mensaje'] ?? '')
+                : null;
 
             return [
-                'success' => $response->successful() && ($body['success'] ?? false),
-                'data'    => $body,
-                'error'   => $response->successful() ? null : ($body['message'] ?? 'Error al reenviar'),
+                'success'      => $response->successful() && ($body['success'] ?? false),
+                'estado_sunat' => $estadoLocal,
+                'error'        => $errorInfo ?? ($response->successful() ? null : ($body['message'] ?? 'Error al reenviar')),
+                'data'         => $body,
             ];
         } catch (\Throwable $e) {
+            Log::error('Naniva reenviar excepción', [
+                'comprobante' => $comprobanteId,
+                'error'       => $e->getMessage(),
+            ]);
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
