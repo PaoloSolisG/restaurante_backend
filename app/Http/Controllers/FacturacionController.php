@@ -83,14 +83,18 @@ class FacturacionController extends Controller
 
         $result = $this->facturacion->reenviar($venta->filename_comprobante);
 
-        $venta->update([
-            'estado_sunat'     => $result['estado_sunat'] ?? $venta->estado_sunat,
-            'error_comprobante'=> $result['error'],
-        ]);
+        // Solo actualizar estado_sunat cuando Naniva respondió correctamente
+        $updates = ['error_comprobante' => $result['error']];
+        if ($result['estado_sunat'] !== null) {
+            $updates['estado_sunat'] = $result['estado_sunat'];
+        }
+        $venta->update($updates);
 
         return response()->json([
             'status'  => $result['success'],
-            'message' => $result['success'] ? 'Comprobante reenviado a SUNAT' : ($result['error'] ?? 'Error al reenviar'),
+            'message' => $result['success']
+                ? 'Comprobante reenviado a SUNAT'
+                : ($result['error'] ?? 'Error al reenviar — Naniva no disponible'),
             'data'    => $venta->fresh(),
         ], $result['success'] ? 200 : 502);
     }

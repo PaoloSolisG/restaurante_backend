@@ -266,18 +266,27 @@ class FacturacionService
                 'body_parsed' => $body,
             ]);
 
-            $data         = is_array($body['data'] ?? null) ? $body['data'] : [];
-            $sunatCodigo  = isset($data['sunat']['codigo']) ? (int) $data['sunat']['codigo'] : null;
-            $estadoNaniva = $data['estado'] ?? null;
-            $estadoLocal  = $this->clasificarEstadoSunat($sunatCodigo, $estadoNaniva);
-            $errorInfo    = ($estadoLocal !== 'Aceptado' && $sunatCodigo !== null)
-                ? "SUNAT {$sunatCodigo}: " . ($data['sunat']['mensaje'] ?? '')
-                : null;
+            // Solo clasificar estado cuando Naniva respondió correctamente (2xx).
+            // Un 500 de Naniva no debe cambiar el estado del comprobante.
+            $estadoLocal = null;
+            $errorInfo   = null;
+
+            if ($response->successful()) {
+                $data         = is_array($body['data'] ?? null) ? $body['data'] : [];
+                $sunatCodigo  = isset($data['sunat']['codigo']) ? (int) $data['sunat']['codigo'] : null;
+                $estadoNaniva = $data['estado'] ?? null;
+                $estadoLocal  = $this->clasificarEstadoSunat($sunatCodigo, $estadoNaniva);
+                $errorInfo    = ($estadoLocal !== 'Aceptado' && $sunatCodigo !== null)
+                    ? "SUNAT {$sunatCodigo}: " . ($data['sunat']['mensaje'] ?? '')
+                    : null;
+            }
+
+            $success = $response->successful() && ($body['success'] ?? false);
 
             return [
-                'success'      => $response->successful() && ($body['success'] ?? false),
-                'estado_sunat' => $estadoLocal,
-                'error'        => $errorInfo ?? ($response->successful() ? null : ($body['message'] ?? 'Error al reenviar')),
+                'success'      => $success,
+                'estado_sunat' => $estadoLocal,  // null si Naniva devolvió error HTTP
+                'error'        => $errorInfo ?? ($success ? null : ($body['message'] ?? "Naniva HTTP {$response->status()}")),
                 'data'         => $body,
             ];
         } catch (\Throwable $e) {
