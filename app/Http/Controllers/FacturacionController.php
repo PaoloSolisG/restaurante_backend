@@ -97,7 +97,9 @@ class FacturacionController extends Controller
 
     /**
      * POST /ventas/{id}/comprobante/emitir
-     * Emite (o re-emite) el comprobante de una venta que falló la primera vez.
+     * Emite el comprobante si aún no existe en Naniva.
+     * Si ya tiene numero_comprobante (estado Procesado o similar), reenvía a SUNAT
+     * sin crear un número nuevo — evita duplicados cuando SUNAT estuvo caído.
      */
     public function emitir($id)
     {
@@ -107,11 +109,21 @@ class FacturacionController extends Controller
             return response()->json(['status' => false, 'message' => 'Venta no encontrada'], 404);
         }
 
-        if ($venta->numero_comprobante && $venta->estado_sunat === 'Aceptado') {
+        // Si ya tiene número asignado por Naniva (sea Aceptado, Procesado, etc.)
+        // NO emitir uno nuevo — solo reenviar el existente a SUNAT.
+        if ($venta->numero_comprobante) {
+            $reenvio = $this->facturacion->reenviar($venta->filename_comprobante);
+            if ($reenvio['success']) {
+                $estadoNuevo = $reenvio['data']['data']['estado'] ?? $venta->estado_sunat;
+                $venta->update(['estado_sunat' => $estadoNuevo, 'error_comprobante' => null]);
+            }
             return response()->json([
-                'status'  => false,
-                'message' => "Esta venta ya tiene comprobante emitido: {$venta->numero_comprobante}",
-            ], 409);
+                'status'  => true,
+                'message' => $reenvio['success']
+                    ? "Comprobante {$venta->numero_comprobante} reenviado a SUNAT"
+                    : "Comprobante {$venta->numero_comprobante} ya existe (SUNAT pendiente)",
+                'data'    => $venta->fresh(),
+            ]);
         }
 
         $result = $this->facturacion->emitir($venta);
