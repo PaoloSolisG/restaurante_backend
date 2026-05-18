@@ -581,6 +581,7 @@ class FacturacionService
     private function clasificarEstadoSunat(?int $codigo, ?string $estadoNaniva): string
     {
         if ($estadoNaniva === 'Aceptado') return 'Aceptado';
+        if ($estadoNaniva === 'Pendiente') return 'Enviado';  // SUNAT no respondió, sin CDR, reintentable
         if ($codigo === null || $codigo === 0) return 'Aceptado';
         if ($codigo >= 4000) return 'Aceptado';   // observaciones — registrado con advertencias
         if ($codigo >= 2000) return 'Rechazado';  // error de negocio — CDR de rechazo emitida
