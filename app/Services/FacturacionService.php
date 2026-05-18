@@ -105,9 +105,25 @@ class FacturacionService
                 ];
             }
 
-            $errorMsg = $body['message'] ?? 'Error desconocido al emitir comprobante';
+            // Naniva pudo asignar un número aunque SUNAT lo rechace.
+            // Lo devolvemos igual para guardarlo en BD y evitar generar
+            // un correlativo nuevo en cada reintento.
+            $assignedNumero   = $body['data']['numero']   ?? null;
+            $assignedFilename = $body['data']['filename']
+                ?? ($assignedNumero ? "{$this->rucEmisor}-{$tipoDoc}-{$assignedNumero}" : null);
+            $assignedEstado   = $body['data']['estado']   ?? null;
+            $errorMsg = $body['message'] ?? ($body['data']['error'] ?? 'Error desconocido al emitir comprobante');
+
             Log::error('Naniva emitir fallido', ['venta_id' => $venta->id, 'payload' => $payload, 'response' => $body]);
-            return ['success' => false, 'error' => $errorMsg];
+            return [
+                'success'            => false,
+                'error'              => $errorMsg,
+                'tipo_comprobante'   => $assignedNumero ? $tipoDoc : null,
+                'serie_comprobante'  => $assignedNumero ? $serie   : null,
+                'numero_comprobante' => $assignedNumero,
+                'filename'           => $assignedFilename,
+                'estado_sunat'       => $assignedEstado,
+            ];
         } catch (\Throwable $e) {
             Log::error('Naniva excepción', ['venta_id' => $venta->id, 'msg' => $e->getMessage()]);
             return ['success' => false, 'error' => $e->getMessage()];
