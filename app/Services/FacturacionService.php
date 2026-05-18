@@ -128,8 +128,33 @@ class FacturacionService
                 ];
             }
 
-            // Naniva no asignó número: fallo total (no llegó a procesarse)
-            Log::error('Naniva sin numero asignado', [
+            // Naniva no devolvió el número en la respuesta (data: null al rechazar).
+            // Intentar recuperarlo consultando los comprobantes recientes de Naniva.
+            Log::warning('Naniva sin numero en respuesta — intentando recuperación automática', [
+                'venta_id' => $venta->id,
+                'body'     => $body,
+            ]);
+
+            $numeroRecuperado = $this->recuperarCorrelativoReciente($tipoDoc, $serie);
+            if ($numeroRecuperado) {
+                $filenameRecuperado = "{$this->rucEmisor}-{$tipoDoc}-{$numeroRecuperado}";
+                Log::info('Naniva correlativo recuperado por GET /comprobantes', [
+                    'venta_id' => $venta->id,
+                    'numero'   => $numeroRecuperado,
+                ]);
+                return [
+                    'success'            => true,
+                    'tipo_comprobante'   => $tipoDoc,
+                    'serie_comprobante'  => $serie,
+                    'numero_comprobante' => $numeroRecuperado,
+                    'filename'           => $filenameRecuperado,
+                    'estado_sunat'       => 'Enviado',
+                    'error'              => $errorMsg,
+                ];
+            }
+
+            // No se pudo recuperar el número de ninguna forma.
+            Log::error('Naniva sin numero — recuperación fallida', [
                 'venta_id' => $venta->id,
                 'body'     => $body,
             ]);
@@ -461,6 +486,67 @@ class FacturacionService
     }
 
     // ── Helpers privados ──────────────────────────────────────────────────────
+
+    /**
+     * Consulta GET /comprobantes en Naniva para recuperar el correlativo
+     * del documento más reciente del tipo/serie indicado.
+     * Se usa cuando POST /emitir no devolvió el número en la respuesta.
+     */
+    private function recuperarCorrelativoReciente(string $tipoDoc, string $serie): ?string
+    {
+        try {
+            $response = $this->client()->get('/comprobantes', [
+                'tipo_documento' => $tipoDoc,
+                'serie'          => $serie,
+                'per_page'       => 1,
+            ]);
+
+            Log::info('Naniva GET /comprobantes (recovery)', [
+                'tipo'   => $tipoDoc,
+                'serie'  => $serie,
+                'status' => $response->status(),
+                'body'   => $response->json(),
+            ]);
+
+            if (!$response->successful()) {
+                return null;
+            }
+
+            $body = $response->json();
+
+            // Soportar paginación Laravel ({ data: { data: [...] } }) y lista plana ({ data: [...] })
+            $items = $body['data']['data'] ?? $body['data'] ?? [];
+
+            if (!is_array($items) || empty($items)) {
+                return null;
+            }
+
+            $latest    = $items[0];
+            $createdAt = $latest['created_at'] ?? $latest['fecha_emision'] ?? $latest['FECHA_EMISION'] ?? null;
+
+            // Solo usar si fue creado hace menos de 3 minutos (correlación temporal con la venta actual)
+            if ($createdAt) {
+                try {
+                    $diff = now()->diffInSeconds(\Carbon\Carbon::parse($createdAt));
+                    if ($diff > 180) {
+                        Log::warning('Naniva recovery: comprobante demasiado antiguo', [
+                            'created_at' => $createdAt,
+                            'diff_s'     => $diff,
+                        ]);
+                        return null;
+                    }
+                } catch (\Throwable) {
+                    // Si no parsea la fecha, igual intentamos usar el número
+                }
+            }
+
+            return $latest['numero'] ?? $latest['NUMERO'] ?? null;
+
+        } catch (\Throwable $e) {
+            Log::warning('Naniva recovery GET /comprobantes falló', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
 
     private function client()
     {
