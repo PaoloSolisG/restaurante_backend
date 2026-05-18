@@ -104,25 +104,23 @@ class FacturacionService
         try {
             $response = $this->client()->post('/emitir', $payload);
 
+            // Leer body UNA SOLA VEZ (Naniva usa Transfer-Encoding: chunked — stream no seekable).
             // Naniva a veces antepone "ERROR - YYYY-MM-DD HH:MM:SS --> CODE: mensaje\n"
-            // antes del JSON real, haciendo el body inválido para ->json().
-            // Extraemos el JSON buscando el primer '{'.
+            // antes del JSON real. Buscamos el primer '{' para extraer el JSON válido.
             $bodyRaw = $response->body();
-            $body    = $response->json();
-            if ($body === null && $bodyRaw !== '') {
+            $body    = json_decode($bodyRaw, true);
+            if (!is_array($body) && $bodyRaw !== '') {
                 $jsonStart = strpos($bodyRaw, '{');
                 if ($jsonStart !== false) {
                     $body = json_decode(substr($bodyRaw, $jsonStart), true);
                 }
             }
-            $body = $body ?? [];
+            $body = is_array($body) ? $body : [];
 
-            // Log crudo completo — body como texto antes de parsear JSON
             Log::info('Naniva emitir RESPONSE', [
                 'venta_id'    => $venta->id,
                 'http_status' => $response->status(),
-                'headers'     => $response->headers(),
-                'body_raw'    => $bodyRaw,
+                'body_raw'    => substr($bodyRaw, 0, 3000),
                 'body_parsed' => $body,
             ]);
 
