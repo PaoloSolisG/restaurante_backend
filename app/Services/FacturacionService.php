@@ -104,38 +104,60 @@ class FacturacionService
         try {
             $response = $this->client()->post('/emitir', $payload);
 
+            // Naniva a veces antepone "ERROR - YYYY-MM-DD HH:MM:SS --> CODE: mensaje\n"
+            // antes del JSON real, haciendo el body inválido para ->json().
+            // Extraemos el JSON buscando el primer '{'.
+            $bodyRaw = $response->body();
+            $body    = $response->json();
+            if ($body === null && $bodyRaw !== '') {
+                $jsonStart = strpos($bodyRaw, '{');
+                if ($jsonStart !== false) {
+                    $body = json_decode(substr($bodyRaw, $jsonStart), true);
+                }
+            }
+            $body = $body ?? [];
+
             // Log crudo completo — body como texto antes de parsear JSON
             Log::info('Naniva emitir RESPONSE', [
                 'venta_id'    => $venta->id,
                 'http_status' => $response->status(),
                 'headers'     => $response->headers(),
-                'body_raw'    => $response->body(),
-                'body_json'   => $response->json(),
+                'body_raw'    => $bodyRaw,
+                'body_parsed' => $body,
             ]);
 
-            $body = $response->json() ?? [];
+            $data         = is_array($body['data'] ?? null) ? $body['data'] : [];
+            $numero       = $data['numero']   ?? null;
+            $filename     = $data['filename'] ?? ($numero ? "{$this->rucEmisor}-{$tipoDoc}-{$numero}" : null);
+            $estadoNaniva = $data['estado']   ?? null;
 
-            // Extraer numero SIN IMPORTAR si success=true o false.
-            // Naniva asigna el correlativo antes de enviarlo a SUNAT,
-            // por lo que puede estar en la respuesta aunque SUNAT rechace.
-            $data     = is_array($body['data'] ?? null) ? $body['data'] : [];
-            $numero   = $data['numero']   ?? null;
-            $filename = $data['filename'] ?? ($numero ? "{$this->rucEmisor}-{$tipoDoc}-{$numero}" : null);
-            $estado   = $data['estado']   ?? null;
-            $errorMsg = $body['message']  ?? ($data['error'] ?? null);
+            // Código y mensaje exacto que SUNAT devolvió (dentro de data.sunat)
+            $sunatCodigo  = $data['sunat']['codigo']  ?? null;
+            $sunatMensaje = $data['sunat']['mensaje']  ?? null;
 
-            // Si Naniva asignó número → guardarlo siempre y marcar como enviado.
-            // El estado real de SUNAT (Aceptado/Rechazado) se refleja en $estado.
+            // Si Naniva asignó número → guardarlo siempre.
+            // Estado local: solo "Aceptado" cuando SUNAT realmente lo aceptó.
+            // Cualquier rechazo (incluyendo el bug 306 del entorno beta que afecta
+            // a todos) se guarda como "Enviado" para poder reenviar sin duplicar.
             if ($numero) {
-                $esAceptado = $response->successful() && ($body['success'] ?? false);
+                $esAceptado  = ($estadoNaniva === 'Aceptado');
+                $estadoLocal = $esAceptado ? 'Aceptado' : 'Enviado';
+
+                $errorInfo = null;
+                if (!$esAceptado) {
+                    $errorInfo = $sunatCodigo !== null
+                        ? "SUNAT {$sunatCodigo}: {$sunatMensaje}"
+                        : ($body['message'] ?? 'Comprobante enviado, pendiente confirmación SUNAT');
+                }
+
                 return [
-                    'success'            => true,   // tiene correlativo, fue enviado a Naniva
+                    'success'            => true,
                     'tipo_comprobante'   => $tipoDoc,
                     'serie_comprobante'  => $serie,
                     'numero_comprobante' => $numero,
                     'filename'           => $filename,
-                    'estado_sunat'       => $estado ?? ($esAceptado ? 'Procesado' : 'Enviado'),
-                    'error'              => $esAceptado ? null : $errorMsg,
+                    'estado_sunat'       => $estadoLocal,
+                    'error'              => $errorInfo,
                 ];
             }
 
