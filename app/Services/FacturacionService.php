@@ -453,7 +453,7 @@ class FacturacionService
                 'Accept'       => 'application/json',
             ])
             ->asJson()
-            ->timeout(15);
+            ->timeout(90); // SUNAT puede tardar hasta 60-90s en responder
     }
 
     private function downloadClient()
