@@ -127,6 +127,7 @@ class FacturacionService
             ]);
 
             $data         = is_array($body['data'] ?? null) ? $body['data'] : [];
+            $nanivaId     = $data['id']      ?? null;   // ID numérico interno de Naniva
             $numero       = $data['numero']   ?? null;
             $filename     = $data['filename'] ?? ($numero ? "{$this->rucEmisor}-{$tipoDoc}-{$numero}" : null);
             $estadoNaniva = $data['estado']   ?? null;
@@ -141,6 +142,7 @@ class FacturacionService
 
                 return [
                     'success'            => true,
+                    'naniva_id'          => $nanivaId,
                     'tipo_comprobante'   => $tipoDoc,
                     'serie_comprobante'  => $serie,
                     'numero_comprobante' => $numero,
@@ -161,15 +163,16 @@ class FacturacionService
             if ($recuperado) {
                 $nRec = $recuperado['numero'];
                 $fRec = $recuperado['filename'] ?? "{$this->rucEmisor}-{$tipoDoc}-{$nRec}";
-                $eRec = $recuperado['estado'];
+                $eRec = ($recuperado['estado'] === 'Aceptado') ? 'Aceptado' : 'Enviado';
                 Log::info('Naniva correlativo recuperado por GET /comprobantes', [
-                    'venta_id' => $venta->id,
-                    'numero'   => $nRec,
-                    'estado'   => $eRec,
+                    'venta_id'  => $venta->id,
+                    'numero'    => $nRec,
+                    'naniva_id' => $recuperado['id'] ?? null,
+                    'estado'    => $eRec,
                 ]);
-                $eRec = ($eRec === 'Aceptado') ? 'Aceptado' : 'Enviado';
                 return [
                     'success'            => true,
+                    'naniva_id'          => $recuperado['id'] ?? null,
                     'tipo_comprobante'   => $tipoDoc,
                     'serie_comprobante'  => $serie,
                     'numero_comprobante' => $nRec,
@@ -650,6 +653,7 @@ class FacturacionService
             }
 
             return [
+                'id'       => $latest['id']       ?? null,   // ID numérico de Naniva
                 'numero'   => $numero,
                 'filename' => $latest['filename'] ?? null,
                 'estado'   => $latest['estado']   ?? 'Enviado',

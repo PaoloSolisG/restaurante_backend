@@ -81,7 +81,9 @@ class FacturacionController extends Controller
             ], 404);
         }
 
-        $result = $this->facturacion->reenviar($venta->filename_comprobante);
+        // Usar naniva_id (numérico) si está disponible, sino el filename como fallback
+        $identificador = $venta->naniva_id ?? $venta->filename_comprobante;
+        $result = $this->facturacion->reenviar($identificador);
 
         // Solo actualizar estado_sunat cuando Naniva respondió correctamente
         $updates = ['error_comprobante' => $result['error']];
@@ -113,19 +115,20 @@ class FacturacionController extends Controller
             return response()->json(['status' => false, 'message' => 'Venta no encontrada'], 404);
         }
 
-        // Si ya tiene número asignado por Naniva (sea Aceptado, Procesado, etc.)
-        // NO emitir uno nuevo — solo reenviar el existente a SUNAT.
+        // Si ya tiene número asignado por Naniva, NO emitir uno nuevo — reenviar el existente.
         if ($venta->numero_comprobante) {
-            $reenvio = $this->facturacion->reenviar($venta->filename_comprobante);
-            if ($reenvio['success']) {
-                $estadoNuevo = $reenvio['data']['data']['estado'] ?? $venta->estado_sunat;
-                $venta->update(['estado_sunat' => $estadoNuevo, 'error_comprobante' => null]);
+            $identificador = $venta->naniva_id ?? $venta->filename_comprobante;
+            $reenvio = $this->facturacion->reenviar($identificador);
+            $updates = ['error_comprobante' => $reenvio['error']];
+            if ($reenvio['estado_sunat'] !== null) {
+                $updates['estado_sunat'] = $reenvio['estado_sunat'];
             }
+            $venta->update($updates);
             return response()->json([
                 'status'  => true,
                 'message' => $reenvio['success']
                     ? "Comprobante {$venta->numero_comprobante} reenviado a SUNAT"
-                    : "Comprobante {$venta->numero_comprobante} ya existe (SUNAT pendiente)",
+                    : "Comprobante {$venta->numero_comprobante}: " . ($reenvio['error'] ?? 'sin respuesta de SUNAT'),
                 'data'    => $venta->fresh(),
             ]);
         }
@@ -133,12 +136,13 @@ class FacturacionController extends Controller
         $result = $this->facturacion->emitir($venta);
 
         $venta->update([
-            'tipo_comprobante'   => $result['tipo_comprobante']   ?? $venta->tipo_comprobante,
-            'serie_comprobante'  => $result['serie_comprobante']  ?? $venta->serie_comprobante,
-            'numero_comprobante' => $result['numero_comprobante'] ?? $venta->numero_comprobante,
-            'filename_comprobante' => $result['filename']         ?? $venta->filename_comprobante,
-            'estado_sunat'       => $result['estado_sunat']       ?? $venta->estado_sunat,
-            'error_comprobante'  => $result['error'],
+            'naniva_id'            => $result['naniva_id']          ?? $venta->naniva_id,
+            'tipo_comprobante'     => $result['tipo_comprobante']   ?? $venta->tipo_comprobante,
+            'serie_comprobante'    => $result['serie_comprobante']  ?? $venta->serie_comprobante,
+            'numero_comprobante'   => $result['numero_comprobante'] ?? $venta->numero_comprobante,
+            'filename_comprobante' => $result['filename']           ?? $venta->filename_comprobante,
+            'estado_sunat'         => $result['estado_sunat']       ?? $venta->estado_sunat,
+            'error_comprobante'    => $result['error'],
         ]);
 
         AuditLog::registrar(
