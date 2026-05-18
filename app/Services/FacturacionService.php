@@ -93,16 +93,27 @@ class FacturacionService
             'detalles' => $this->buildDetalles($venta),
         ];
 
+        // Log del payload enviado a Naniva
+        Log::info('Naniva emitir REQUEST', [
+            'venta_id'   => $venta->id,
+            'url'        => $this->baseUrl . '/emitir',
+            'ruc_emisor' => $this->rucEmisor,
+            'payload'    => $payload,
+        ]);
+
         try {
             $response = $this->client()->post('/emitir', $payload);
-            $body     = $response->json() ?? [];
 
-            // Log completo para diagnóstico — ver storage/logs/laravel.log
-            Log::info('Naniva emitir response', [
-                'venta_id'   => $venta->id,
-                'http_status'=> $response->status(),
-                'body'       => $body,
+            // Log crudo completo — body como texto antes de parsear JSON
+            Log::info('Naniva emitir RESPONSE', [
+                'venta_id'    => $venta->id,
+                'http_status' => $response->status(),
+                'headers'     => $response->headers(),
+                'body_raw'    => $response->body(),
+                'body_json'   => $response->json(),
             ]);
+
+            $body = $response->json() ?? [];
 
             // Extraer numero SIN IMPORTAR si success=true o false.
             // Naniva asigna el correlativo antes de enviarlo a SUNAT,
