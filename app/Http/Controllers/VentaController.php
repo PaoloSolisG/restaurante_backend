@@ -192,7 +192,6 @@ class VentaController extends Controller
             $result      = $facturacion->emitir($venta->load('cliente', 'detalles'));
 
             $venta->update([
-                'naniva_id'           => $result['naniva_id']          ?? null,
                 'tipo_comprobante'    => $result['tipo_comprobante']   ?? null,
                 'serie_comprobante'   => $result['serie_comprobante']  ?? null,
                 'numero_comprobante'  => $result['numero_comprobante'] ?? null,

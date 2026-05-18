@@ -136,7 +136,6 @@ class FacturacionController extends Controller
         $result = $this->facturacion->emitir($venta);
 
         $venta->update([
-            'naniva_id'            => $result['naniva_id']          ?? $venta->naniva_id,
             'tipo_comprobante'     => $result['tipo_comprobante']   ?? $venta->tipo_comprobante,
             'serie_comprobante'    => $result['serie_comprobante']  ?? $venta->serie_comprobante,
             'numero_comprobante'   => $result['numero_comprobante'] ?? $venta->numero_comprobante,

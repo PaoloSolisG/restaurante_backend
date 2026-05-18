@@ -27,7 +27,6 @@ class Venta extends Model
         'notas',
         'activo',
         // Facturación electrónica
-        'naniva_id',
         'tipo_comprobante',
         'serie_comprobante',
         'numero_comprobante',
