@@ -21,6 +21,7 @@ use App\Http\Controllers\CajaController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\ConsultaController;
 use App\Http\Controllers\PublicCartaController;
+use App\Http\Controllers\MozoDashboardController;
 
 Route::middleware(['api', InitializeTenancyOptional::class])->group(function () {
 
@@ -176,6 +177,11 @@ Route::middleware(['api', InitializeTenancyOptional::class])->group(function () 
         });
 
         Route::get('/api/facturacion/status', [FacturacionController::class, 'status']);
+
+        // ── Mozo Dashboard ─────────────────────────────────────
+        Route::get('/api/mozo/mis-ordenes',            [MozoDashboardController::class, 'misOrdenes']);
+        Route::post('/api/ordenes/{id}/asignarme',     [MozoDashboardController::class, 'asignarme']);
+        Route::post('/api/ordenes/{id}/liberar',       [MozoDashboardController::class, 'liberar']);
 
         // ── Auditoría ──────────────────────────────────────────
         Route::get('/api/audit-logs', [AuditLogController::class, 'index']);
