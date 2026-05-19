@@ -20,8 +20,16 @@ use App\Http\Controllers\AuditLogController;
 use App\Http\Controllers\CajaController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\ConsultaController;
+use App\Http\Controllers\PublicCartaController;
 
 Route::middleware(['api', InitializeTenancyOptional::class])->group(function () {
+
+    // ── Carta digital pública (sin auth — acceso por QR) ──────
+    Route::prefix('api/public')->group(function () {
+        Route::get('/carta/{codigo}',          [PublicCartaController::class, 'carta']);
+        Route::post('/carta/{codigo}/pedido',  [PublicCartaController::class, 'pedido']);
+        Route::get('/carta/{codigo}/estado',   [PublicCartaController::class, 'estado']);
+    });
 
     Route::get('/api/test-tenant', function () {
         return response()->json(['tenant' => tenant('id'), 'db' => config('database.connections.tenant.database')]);

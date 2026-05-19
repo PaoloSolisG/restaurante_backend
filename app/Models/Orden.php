@@ -13,10 +13,11 @@ class Orden extends Model
         'cliente_id',
         'mozo_id',
         'tipo_consumo',
+        'origen',
         'estado',
         'notas',
         'subtotal',
-        'total'
+        'total',
     ];
 
     public function mesa()

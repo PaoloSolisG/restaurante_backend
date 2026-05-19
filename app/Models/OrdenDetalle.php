@@ -14,9 +14,11 @@ class OrdenDetalle extends Model
         'cantidad',
         'precio_unitario',
         'subtotal',
+        'cliente_nombre',
+        'notas_item',
         'cocinero_id',
         'area',
-        'estado'
+        'estado',
     ];
 
 
