@@ -29,7 +29,7 @@ class OrdenCreada implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return [
-            new Channel('ordenes-canal'),
+            new Channel('ordenes-canal.' . tenant('id')),
         ];
     }
 
