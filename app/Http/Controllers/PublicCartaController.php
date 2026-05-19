@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\OrdenCreada;
 use App\Models\Categoria;
 use App\Models\Mesa;
 use App\Models\Orden;
@@ -113,6 +114,10 @@ class PublicCartaController extends Controller
             $orden->increment('total', $incremento);
 
             DB::commit();
+
+            // Notificar al KDS en tiempo real (igual que OrdenController)
+            $orden->load('mesa', 'cliente', 'detalles.producto');
+            event(new OrdenCreada($orden));
 
             return response()->json([
                 'status'   => true,
