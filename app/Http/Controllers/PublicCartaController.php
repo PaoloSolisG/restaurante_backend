@@ -144,14 +144,16 @@ class PublicCartaController extends Controller
 
         $request->validate(['cliente_nombre' => 'required|string']);
 
-        $detalle = OrdenDetalle::whereHas('orden', fn($q) => $q->where('mesa_id', $mesa->id))
+        $detalle = OrdenDetalle::whereHas('orden', function ($q) use ($mesa) {
+                $q->where('mesa_id', $mesa->id)->where('estado', 'pendiente');
+            })
             ->where('id', $detalleId)
             ->where('cliente_nombre', $request->cliente_nombre)
             ->where('estado', 'pendiente')
             ->first();
 
         if (!$detalle) {
-            return response()->json(['status' => false, 'message' => 'Ítem no encontrado o ya no se puede cancelar'], 404);
+            return response()->json(['status' => false, 'message' => 'Este ítem ya no se puede cancelar. El mozo ya aceptó la orden.'], 404);
         }
 
         DB::beginTransaction();
