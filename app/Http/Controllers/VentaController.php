@@ -207,6 +207,23 @@ class VentaController extends Controller
                 'estado_sunat'       => $venta->estado_sunat,
                 'error'              => !empty($venta->numero_comprobante) ? ($result['error'] ?? null) : ($result['error'] ?? null),
             ];
+        } else {
+            // Nota de Venta — correlativo propio NV01-{n}, sin SUNAT
+            $numero = Venta::where('tipo_comprobante', 'NV')->count() + 1;
+            $correlativo = 'NV01-' . $numero;
+
+            $venta->update([
+                'tipo_comprobante'   => 'NV',
+                'serie_comprobante'  => 'NV01',
+                'numero_comprobante' => $correlativo,
+            ]);
+
+            $comprobanteInfo = [
+                'emitido'            => true,
+                'numero_comprobante' => $correlativo,
+                'estado_sunat'       => null,
+                'error'              => null,
+            ];
         }
 
         AuditLog::registrar(
