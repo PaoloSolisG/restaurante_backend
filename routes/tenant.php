@@ -127,6 +127,7 @@ Route::middleware(['api', InitializeTenancyOptional::class])->group(function () 
             Route::delete('/{id}',                 'destroy');
             Route::post('/{id}/detalles',          'agregarDetalles');
             Route::put('/{id}/asignar-mozo',       'asignarMozo');
+            Route::post('/{id}/cancelar',          'cancelar');
         });
 
         // ── Cocineros ──────────────────────────────────────────

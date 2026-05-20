@@ -181,6 +181,43 @@ class OrdenController extends Controller
         return response()->json(['status' => true, 'message' => 'Orden eliminada']);
     }
 
+    /**
+     * POST /ordenes/{id}/cancelar
+     * Cancela una orden (cualquier estado no cerrado) con motivo obligatorio.
+     * No borra el registro — lo deja como 'cancelado' para auditoría.
+     */
+    public function cancelar(Request $request, $id)
+    {
+        $request->validate([
+            'motivo' => 'required|string|max:500',
+        ]);
+
+        $orden = Orden::with('mesa')->find($id);
+        if (!$orden) {
+            return response()->json(['status' => false, 'message' => 'Orden no encontrada'], 404);
+        }
+        if ($orden->estado === 'cerrado') {
+            return response()->json(['status' => false, 'message' => 'No se puede cancelar una orden ya cerrada/facturada'], 422);
+        }
+        if ($orden->estado === 'cancelado') {
+            return response()->json(['status' => false, 'message' => 'La orden ya está cancelada'], 422);
+        }
+
+        $orden->update([
+            'estado' => 'cancelado',
+            'notas'  => 'CANCELADO: ' . trim($request->motivo),
+        ]);
+
+        if ($orden->mesa) {
+            $orden->mesa->update(['estado' => 'libre']);
+        }
+
+        return response()->json([
+            'status'  => true,
+            'message' => 'Orden cancelada correctamente',
+        ]);
+    }
+
     // ──────────────────────────────────────────────────────────
     // CERRAR ORDEN (PRE CUENTA → FACTURAR)
     // POST /ordenes/:id/cerrar
