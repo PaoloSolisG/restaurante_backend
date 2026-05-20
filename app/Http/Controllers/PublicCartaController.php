@@ -163,6 +163,14 @@ class PublicCartaController extends Controller
             $orden->decrement('total',    $detalle->subtotal);
             $detalle->delete();
 
+            // Si la orden queda sin ítems, cancelarla automáticamente y liberar mesa
+            if ($orden->detalles()->count() === 0) {
+                $orden->update(['estado' => 'cancelado', 'notas' => 'CANCELADO: todos los ítems fueron cancelados por el cliente']);
+                if ($orden->mesa) {
+                    $orden->mesa->update(['estado' => 'libre']);
+                }
+            }
+
             DB::commit();
 
             $orden->load('mesa', 'cliente', 'detalles.producto');

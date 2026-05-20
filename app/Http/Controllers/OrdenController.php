@@ -213,6 +213,10 @@ class OrdenController extends Controller
             $orden->mesa->update(['estado' => 'libre']);
         }
 
+        // Notificar KDS y panel mozo en tiempo real
+        $orden->load('mesa', 'cliente', 'detalles.producto');
+        event(new OrdenCreada($orden));
+
         return response()->json([
             'status'  => true,
             'message' => 'Orden cancelada correctamente',
