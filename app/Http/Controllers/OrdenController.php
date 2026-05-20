@@ -80,7 +80,7 @@ class OrdenController extends Controller
             'cliente_id'   => $request->cliente_id,
             'mozo_id'      => $request->mozo_id ?? null,
             'tipo_consumo' => $request->tipo_consumo,
-            'estado'       => 'en_preparacion', // staff → directo a cocina
+            'estado'       => 'pendiente',
             'notas'        => $request->notas,
             'subtotal'     => 0,
             'total'        => 0,

@@ -76,7 +76,7 @@ class MozoDashboardController extends Controller
 
         $orden->update([
             'mozo_id' => $mozo->id,
-            'estado'  => 'en_preparacion',
+            // estado se mantiene 'pendiente' — el cocinero lo mueve a en_preparacion desde el KDS
         ]);
 
         $orden->load('mesa', 'cliente', 'detalles.producto');
