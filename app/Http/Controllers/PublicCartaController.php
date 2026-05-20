@@ -131,6 +131,49 @@ class PublicCartaController extends Controller
     }
 
     /**
+     * DELETE /api/public/carta/{codigo}/detalle/{detalleId}
+     * Cancela un ítem propio si aún está pendiente.
+     * Body: { cliente_nombre }
+     */
+    public function cancelarDetalle(Request $request, $codigo, $detalleId)
+    {
+        $mesa = Mesa::where('codigo', $codigo)->where('activo', true)->first();
+        if (!$mesa) {
+            return response()->json(['status' => false, 'message' => 'Mesa no encontrada'], 404);
+        }
+
+        $request->validate(['cliente_nombre' => 'required|string']);
+
+        $detalle = OrdenDetalle::whereHas('orden', fn($q) => $q->where('mesa_id', $mesa->id))
+            ->where('id', $detalleId)
+            ->where('cliente_nombre', $request->cliente_nombre)
+            ->where('estado', 'pendiente')
+            ->first();
+
+        if (!$detalle) {
+            return response()->json(['status' => false, 'message' => 'Ítem no encontrado o ya no se puede cancelar'], 404);
+        }
+
+        DB::beginTransaction();
+        try {
+            $orden = $detalle->orden;
+            $orden->decrement('subtotal', $detalle->subtotal);
+            $orden->decrement('total',    $detalle->subtotal);
+            $detalle->delete();
+
+            DB::commit();
+
+            $orden->load('mesa', 'cliente', 'detalles.producto');
+            event(new OrdenCreada($orden));
+
+            return response()->json(['status' => true, 'message' => 'Ítem cancelado correctamente']);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            return response()->json(['status' => false, 'message' => 'Error al cancelar'], 500);
+        }
+    }
+
+    /**
      * GET /api/public/carta/{codigo}/estado
      * Devuelve el estado actual de la orden de la mesa.
      */

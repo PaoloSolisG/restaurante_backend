@@ -27,9 +27,10 @@ Route::middleware(['api', InitializeTenancyOptional::class])->group(function () 
 
     // ── Carta digital pública (sin auth — acceso por QR) ──────
     Route::prefix('api/public')->group(function () {
-        Route::get('/carta/{codigo}',          [PublicCartaController::class, 'carta']);
-        Route::post('/carta/{codigo}/pedido',  [PublicCartaController::class, 'pedido']);
-        Route::get('/carta/{codigo}/estado',   [PublicCartaController::class, 'estado']);
+        Route::get('/carta/{codigo}',                        [PublicCartaController::class, 'carta']);
+        Route::post('/carta/{codigo}/pedido',                [PublicCartaController::class, 'pedido']);
+        Route::get('/carta/{codigo}/estado',                 [PublicCartaController::class, 'estado']);
+        Route::delete('/carta/{codigo}/detalle/{detalleId}', [PublicCartaController::class, 'cancelarDetalle']);
     });
 
     Route::get('/api/test-tenant', function () {
